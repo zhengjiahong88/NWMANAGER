@@ -12,5 +12,3 @@ git remote remove origin 2>nul
 git remote add origin https://github.com/zhengjiahong88/NWMANAGER.git
 
 git push -u origin main
-
-pause

@@ -10,11 +10,9 @@ final class Musketeer {
             ATTACK_READY_COLOR = new Color(248, 205, 76), ACTIVE_ATTACK_COLOR = new Color(255, 224, 42),
             ATTACK_RECOVERY_COLOR = new Color(198, 126, 35), BLOCK_GLOW_COLOR = new Color(48, 220, 235);
 
-    private final String frenchName, chineseName;
-    final int team;
+    private final AgentConfiguration configuration;
+    final Team team;
     final Color color;
-    final AgentStats stats;
-    final Tactic tactic;
     double x, y, previousX, previousY, velocityX, velocityY, movementHeading, angle, pitch, desiredPitch,
             attackPitch, baseAttackPitch, weaponYaw, desiredWeaponYaw, previousTipX, previousTipY,
             manipulationPitchOffset, manipulationYawOffset, baitOffset, baitTime;
@@ -34,8 +32,7 @@ final class Musketeer {
     double hitMessageTime, chamberMessageTime, chamberTimingError, baitTrapMessageTime, punishMessageTime,
             baitAdvanceMessageTime, blockSparkTime, blockSparkX, blockSparkY, backstabMessageTime,
             doubleBlockSwitchTime, doubleBlockMessageTime;
-    double dezoneTime, dezoneCooldown, dezoneDangerTime, targetLockTime, rearReactionTime, backEscapeTime,
-            perceptionTime, freeKillPerceivedDistance;
+    double dezoneTime, dezoneCooldown, dezoneDangerTime, targetLockTime, rearReactionTime, backEscapeTime, freeKillPerceivedDistance;
     int baitSequence, observedBaitSequence, chamberChain, chamberMessageChain, attackSequence, blockSequence,
             directionStreak, engagementSide = 1, feintCount;
     DezoneMovement dezoneMovement = DezoneMovement.NONE;
@@ -48,14 +45,10 @@ final class Musketeer {
     Musketeer target, rearThreat, doubleBlockThreat, dezoneOriginalTarget, dezoneSwitchTarget;
     final IdentityHashMap<Musketeer, OpponentAwareness> opponentAwareness = new IdentityHashMap<>();
 
-    Musketeer(String frenchName, String chineseName, int team, Color color, AgentStats stats, Tactic tactic,
-              double x, double y, double angle) {
-        this.frenchName = frenchName;
-        this.chineseName = chineseName;
+    Musketeer(AgentConfiguration configuration, Team team, Color color, double x, double y, double angle) {
+        this.configuration = configuration;
         this.team = team;
         this.color = color;
-        this.stats = stats;
-        this.tactic = tactic;
         this.x = x;
         this.y = y;
         this.angle = angle;
@@ -64,6 +57,14 @@ final class Musketeer {
         movementHeading = angle;
         previousTipX = tipX();
         previousTipY = tipY();
+    }
+
+    AgentStats getStats() {
+        return configuration.stats();
+    }
+
+    Tactic getTactic() {
+        return configuration.tactic();
     }
 
     double weaponLength() {
@@ -131,7 +132,7 @@ final class Musketeer {
     }
 
     String name(UiLanguage language) {
-        return language.text(frenchName, chineseName);
+        return language.text(configuration.name(), configuration.name());
     }
 
     void paint(Graphics2D g, double scale, double originX, double originY, UiLanguage language) {

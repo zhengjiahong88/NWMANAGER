@@ -3,22 +3,30 @@ import java.util.Random;
 
 final class DuelSimulation {
     static final double ARENA_WIDTH = 8.0, ARENA_HEIGHT = 7.0;
-    static final int BLUE_TEAM = 0, RED_TEAM = 1, DRAW = 2;
-    private static final double DECISION_INTERVAL = 0.10, HOLD_LIMIT = 0.75, BLOCK_MIN_TIME = 0.18;
-    private static final double PERCEPTION_INTERVAL = 0.25;
-    private static final double BACKWARD_SPEED_FACTOR = 0.62, BLOCK_STUN_TIME = 0.18;
-    private static final double REAR_ATTACK_ANGLE = Math.toRadians(115);
-    private static final double DOUBLE_BLOCK_WINDOW = 0.20, DOUBLE_BLOCK_MIN_DURATION = 0.26;
-    private static final double DEZONE_BACKWARD_LIMIT = 2.55, TARGET_SWITCH_MAX_DISTANCE = 3.20;
-    private static final double SIMPLE_CHAMBER_WINDOW = 0.025, PERFECT_CHAMBER_WINDOW = 0.004;
-    private static final double CHAMBER_ATTEMPT_LIMIT = 0.65, SIMPLE_CHAMBER_HOLD = 0.24, WEAPON_HEIGHT = 1.15;
-    private static final double RECHAMBER_BASE_FACTOR = 0.50, RECHAMBER_CHAIN_PENALTY = 0.10,
+    private static final double
+            DECISION_INTERVAL = 0.10,
+            HOLD_LIMIT = 0.75,
+            BLOCK_MIN_TIME = 0.18,
+            BACKWARD_SPEED_FACTOR = 0.62,
+            BLOCK_STUN_TIME = 0.18,
+            REAR_ATTACK_ANGLE = Math.toRadians(115),
+            DOUBLE_BLOCK_WINDOW = 0.20,
+            DOUBLE_BLOCK_MIN_DURATION = 0.26,
+            DEZONE_BACKWARD_LIMIT = 2.55,
+            TARGET_SWITCH_MAX_DISTANCE = 3.20,
+            SIMPLE_CHAMBER_WINDOW = 0.025,
+            PERFECT_CHAMBER_WINDOW = 0.004,
+            CHAMBER_ATTEMPT_LIMIT = 0.65,
+            SIMPLE_CHAMBER_HOLD = 0.24,
+            WEAPON_HEIGHT = 1.15,
+            RECHAMBER_BASE_FACTOR = 0.50,
+            RECHAMBER_CHAIN_PENALTY = 0.10,
             MIN_RECHAMBER_FACTOR = 0.05;
     private static final int CHAMBER_BLOCK_BONUS = 8;
     private final Random random = new Random();
     private final AgentConfiguration[] blueConfigurations, redConfigurations;
     Musketeer[] blueTeam, redTeam, agents;
-    int winningTeam = -1;
+    Team winningTeam;
 
     DuelSimulation() {
         this(AgentConfiguration.defaultBlue(), AgentConfiguration.defaultBlueTwo(),
@@ -39,27 +47,21 @@ final class DuelSimulation {
 
     void reset() {
         blueTeam = new Musketeer[]{
-                createAgent(blueConfigurations[0], BLUE_TEAM, new Color(48, 112, 220), 1.65, 2.45, 0),
-                createAgent(blueConfigurations[1], BLUE_TEAM, new Color(40, 151, 184), 1.65, 4.55, 0)
+                new Musketeer(blueConfigurations[0], Team.BLUE, new Color(48, 112, 220), 1.65, 2.45, 0),
+                new Musketeer(blueConfigurations[1], Team.BLUE, new Color(40, 151, 184), 1.65, 4.55, 0)
         };
         redTeam = new Musketeer[]{
-                createAgent(redConfigurations[0], RED_TEAM, new Color(215, 62, 65), ARENA_WIDTH - 1.65, 2.45, Math.PI),
-                createAgent(redConfigurations[1], RED_TEAM, new Color(221, 111, 48), ARENA_WIDTH - 1.65, 4.55, Math.PI)
+                new Musketeer(redConfigurations[0], Team.RED, new Color(215, 62, 65), ARENA_WIDTH - 1.65, 2.45, Math.PI),
+                new Musketeer(redConfigurations[1], Team.RED, new Color(221, 111, 48), ARENA_WIDTH - 1.65, 4.55, Math.PI)
         };
         agents = new Musketeer[]{blueTeam[0], blueTeam[1], redTeam[0], redTeam[1]};
-        winningTeam = -1;
+        winningTeam = null;
         for (var agent : agents) initializeAwareness(agent);
         for (var agent : agents) selectTarget(agent, true);
     }
 
-    private Musketeer createAgent(AgentConfiguration configuration, int team, Color color,
-                                   double x, double y, double angle) {
-        return new Musketeer(configuration.name(), configuration.name(), team, color, configuration.stats(),
-                configuration.tactic(), x, y, angle);
-    }
-
     void update(double dt) {
-        if (winningTeam >= 0) return;
+        if (winningTeam != null) return;
         for (var agent : agents) snapshotMotion(agent);
         for (var agent : agents) updateAgent(agent, dt);
         separateAgents();
@@ -94,11 +96,6 @@ final class DuelSimulation {
         if (!self.alive) return;
         for (var awareness : self.opponentAwareness.values())
             if (awareness.memoryTime > 0) awareness.memoryTime = Math.max(0, awareness.memoryTime - dt);
-        self.perceptionTime -= dt;
-        if (self.perceptionTime <= 0) {
-            updatePerception(self);
-            self.perceptionTime = PERCEPTION_INTERVAL + random.nextDouble() * 0.08;
-        }
         updateBackAwareness(self, dt);
         updateTargetSwitchDezone(self, dt);
         self.targetLockTime -= dt;
@@ -109,6 +106,7 @@ final class DuelSimulation {
         updateEngagementPlan(self, enemy, dt);
         updateState(self);
         if (self.decisionTime <= 0) {
+            updatePerception(self);
             chooseDecision(self, enemy);
             self.decisionTime = DECISION_INTERVAL + random.nextDouble() * 0.035;
         }
@@ -122,7 +120,6 @@ final class DuelSimulation {
             var visible = Math.abs(angleDifference(self.angle, towardOpponent)) <= Math.toRadians(115);
             self.opponentAwareness.put(opponent, new OpponentAwareness(opponent.x, opponent.y, visible));
         }
-        self.perceptionTime = PERCEPTION_INTERVAL;
     }
 
     private void updatePerception(Musketeer self) {
@@ -145,12 +142,12 @@ final class DuelSimulation {
             awareness.visible = detected;
             if (!detected) continue;
             var angleFactor = perceptionAngleFactor(relativeAngle);
-            var positionError = 0.01 + (100 - self.stats.distanceControl()) * 0.003 +
+            var positionError = 0.01 + (100 - self.getStats().distanceControl()) * 0.003 +
                     (1 - angleFactor) * 0.08;
             awareness.lastKnownX = opponent.x + random.nextGaussian() * positionError;
             awareness.lastKnownY = opponent.y + random.nextGaussian() * positionError;
             awareness.memoryTime = 0.55 +
-                    (self.stats.reaction() + self.stats.decisionMaking()) / 200.0 * 1.30;
+                    (self.getStats().reaction() + self.getStats().decisionMaking()) / 200.0 * 1.30;
             observeCombatPattern(awareness, opponent);
         }
     }
@@ -179,7 +176,7 @@ final class DuelSimulation {
     private double detectionProbability(Musketeer self, Musketeer opponent, OpponentAwareness awareness,
                                         double distance, double relativeAngle) {
         var distanceFactor = Math.clamp(1 - Math.max(0, distance - 1.5) / 4.0, 0.12, 1);
-        var skillFactor = 0.45 + self.stats.peripheralAwareness() * 0.0055;
+        var skillFactor = 0.45 + self.getStats().peripheralAwareness() * 0.0055;
         var attentionFactor = 1.0;
         if (opponent != self.target && self.target != null && self.target.alive) {
             var targetDistance = Math.hypot(self.target.x - self.x, self.target.y - self.y);
@@ -289,17 +286,17 @@ final class DuelSimulation {
             if (visible && opponent.target == self) score -= 0.18;
             if (visible && teammate != null && opponent.target == teammate &&
                     (opponent.isAttacking() || opponent.state == CombatState.ATTACK_HOLD))
-                score -= 0.35 + self.stats.decisionMaking() * 0.006;
+                score -= 0.35 + self.getStats().decisionMaking() * 0.006;
             if (visible && teammate != null && teammate.alive && teammate.target == opponent)
-                score -= self.stats.decisionMaking() * 0.0025;
-            score += random.nextGaussian() * (101 - self.stats.decisionMaking()) * 0.004;
+                score -= self.getStats().decisionMaking() * 0.0025;
+            score += random.nextGaussian() * (101 - self.getStats().decisionMaking()) * 0.004;
             if (score < bestScore) {
                 best = opponent;
                 bestScore = score;
             }
         }
         return best == self.target ? best : changeTarget(self, best,
-                0.55 + self.stats.decisionMaking() * 0.008);
+                0.55 + self.getStats().decisionMaking() * 0.008);
     }
 
     private void updateBackAwareness(Musketeer self, double dt) {
@@ -318,7 +315,7 @@ final class DuelSimulation {
         }
         if (nearestRear != null && nearestRear != self.rearThreat) {
             self.rearThreat = nearestRear;
-            self.rearReactionTime = 0.10 + (100 - self.stats.reaction()) * 0.0032 +
+            self.rearReactionTime = 0.10 + (100 - self.getStats().reaction()) * 0.0032 +
                     random.nextDouble() * 0.06;
         } else if (nearestRear == null && self.backEscapeTime <= 0) {
             self.rearThreat = null;
@@ -356,11 +353,11 @@ final class DuelSimulation {
     }
 
     private Musketeer[] opponentsOf(Musketeer agent) {
-        return agent.team == BLUE_TEAM ? redTeam : blueTeam;
+        return agent.team == Team.BLUE ? redTeam : blueTeam;
     }
 
     private Musketeer teammateOf(Musketeer agent) {
-        var team = agent.team == BLUE_TEAM ? blueTeam : redTeam;
+        var team = agent.team == Team.BLUE ? blueTeam : redTeam;
         return team[0] == agent ? team[1] : team[0];
     }
 
@@ -437,8 +434,8 @@ final class DuelSimulation {
         switch (self.engagementPhase) {
             case PROBE -> {
                 if (self.engagementTime > 0 || distance < 0.95) return;
-                var commitment = Math.clamp(0.18 + self.stats.engagementAbility() * 0.005 +
-                        (self.tactic == Tactic.AGGRESSIVE ? 0.18 : self.tactic == Tactic.DEFENSIVE ? -0.12 : 0),
+                var commitment = Math.clamp(0.18 + self.getStats().engagementAbility() * 0.005 +
+                                (self.getTactic() == Tactic.AGGRESSIVE ? 0.18 : self.getTactic() == Tactic.DEFENSIVE ? -0.12 : 0),
                         0.12, 0.86);
                 if (random.nextDouble() < commitment) beginEngagementPhase(self, EngagementPhase.COMMIT);
                 else self.engagementTime = 0.35 + random.nextDouble() * 0.55;
@@ -472,7 +469,7 @@ final class DuelSimulation {
             var leftScore = movementSpace(self, -1);
             var rightScore = movementSpace(self, 1);
             var correctSide = leftScore >= rightScore ? -1 : 1;
-            self.engagementSide = operationSucceeds(self.stats.engagementAbility()) ? correctSide : -correctSide;
+            self.engagementSide = operationSucceeds(self.getStats().engagementAbility()) ? correctSide : -correctSide;
         }
         self.engagementTime = switch (phase) {
             case PROBE -> 0.45 + random.nextDouble() * 0.75;
@@ -510,7 +507,7 @@ final class DuelSimulation {
             return true;
         }
         if (self.engagementPhase != EngagementPhase.PROBE || distance <= 1.25) return false;
-        var guardChance = (self.stats.defenseTiming() + self.stats.decisionMaking()) / 2200.0;
+        var guardChance = (self.getStats().defenseTiming() + self.getStats().decisionMaking()) / 2200.0;
         if (random.nextDouble() < guardChance) beginAnticipatoryBlock(self, enemy);
         else self.decision = self.engagementSide < 0 ? Decision.PROBE_LEFT : Decision.PROBE_RIGHT;
         return true;
@@ -521,7 +518,7 @@ final class DuelSimulation {
         var dx = knownX(self, enemy) - self.x;
         var dy = knownY(self, enemy) - self.y;
         var distance = Math.hypot(dx, dy);
-        var perceivedDistance = distance + random.nextGaussian() * (100 - self.stats.distanceControl()) * 0.006;
+        var perceivedDistance = distance + random.nextGaussian() * (100 - self.getStats().distanceControl()) * 0.006;
         var enemyAttack = enemyVisible && (enemy.state == CombatState.ATTACK_PREPARE ||
                 enemy.state == CombatState.ATTACK_HOLD || enemy.state == CombatState.CHAMBER_HOLD ||
                 enemy.isAttacking());
@@ -538,7 +535,7 @@ final class DuelSimulation {
 
         if (immediateDanger && !self.threatSeen) {
             self.threatSeen = true;
-            self.reactionTime = 0.10 + (100 - self.stats.reaction()) * 0.0045 + random.nextDouble() * 0.07;
+            self.reactionTime = 0.10 + (100 - self.getStats().reaction()) * 0.0045 + random.nextDouble() * 0.07;
         }
         if (!immediateDanger) self.threatSeen = false;
         if (self.reactionTime > 0) self.reactionTime -= DECISION_INTERVAL;
@@ -555,12 +552,12 @@ final class DuelSimulation {
         }
 
         if (immediateDanger && !enemyBehind && self.reactionTime <= 0 && self.state == CombatState.NEUTRAL) {
-            var defenseCommitment = Math.clamp(self.stats.defenseTiming() + self.tactic.defenseCommitmentBonus,
+            var defenseCommitment = Math.clamp(self.getStats().defenseTiming() + self.getTactic().defenseCommitmentBonus,
                     0, 125);
             if (enemy.isAttacking() || perceivedDistance < 1.72 ||
                     random.nextInt(125) < defenseCommitment) {
-                var chamberChance = Math.min(1, self.stats.chamber() / 100.0 *
-                        self.tactic.chamberMultiplier(readableEnemyAttack));
+                var chamberChance = Math.min(1, self.getStats().chamber() / 100.0 *
+                        self.getTactic().chamberMultiplier(readableEnemyAttack));
                 if (enemy.chamberType == ChamberType.SIMPLE && enemy.chamberChain > 0)
                     chamberChance *= Math.max(MIN_RECHAMBER_FACTOR,
                             RECHAMBER_BASE_FACTOR - RECHAMBER_CHAIN_PENALTY * enemy.chamberChain);
@@ -583,7 +580,7 @@ final class DuelSimulation {
         if (!immediateDanger && self.rearThreat != null && self.rearReactionTime <= 0 &&
                 self.state == CombatState.NEUTRAL &&
                 knownDistance(self, self.rearThreat) < 3.5 &&
-                random.nextDouble() < self.stats.backProtection() / 650.0) {
+                random.nextDouble() < self.getStats().backProtection() / 650.0) {
             beginBackEscape(self);
             return;
         }
@@ -614,8 +611,8 @@ final class DuelSimulation {
             if (self.dezoneSwitchCommitted) {
                 self.decision = Decision.DEZONE_SWITCH_ATTACK;
                 var facing = Math.abs(angleDifference(self.weaponWorldAngle(), Math.atan2(dy, dx)));
-                var releaseSkill = Math.clamp(self.stats.attackTiming() + self.stats.decisionMaking() / 3 +
-                        self.tactic.releaseBonus, 0, 140);
+                var releaseSkill = Math.clamp(self.getStats().attackTiming() + self.getStats().decisionMaking() / 3 +
+                        self.getTactic().releaseBonus, 0, 140);
                 if (perceivedDistance < self.projectedThrustLength() + Musketeer.BODY_RADIUS + 0.18 &&
                         facing < 0.30 && random.nextInt(140) < releaseSkill)
                     startAttack(self, CombatState.ATTACK_ACTIVE);
@@ -647,26 +644,26 @@ final class DuelSimulation {
                 beginFeint(self, false);
                 return;
             }
-            var goodChance = Math.clamp(self.stats.attackTiming() + self.stats.decisionMaking() / 3 +
-                    self.tactic.releaseBonus, 0, 140);
+            var goodChance = Math.clamp(self.getStats().attackTiming() + self.getStats().decisionMaking() / 3 +
+                    self.getTactic().releaseBonus, 0, 140);
             if (perceivedDistance < self.projectedThrustLength() + Musketeer.BODY_RADIUS + 0.18 &&
                     facing < 0.30 && random.nextInt(140) < goodChance) {
                 self.decision = Decision.RELEASE_ATTACK;
                 startAttack(self, CombatState.ATTACK_ACTIVE);
-            } else if (perceivedDistance > self.tactic.holdAdvanceDistance) self.decision = Decision.APPROACH;
-            else if (self.tactic == Tactic.DEFENSIVE && random.nextInt(100) < 45)
+            } else if (perceivedDistance > self.getTactic().holdAdvanceDistance) self.decision = Decision.APPROACH;
+            else if (self.getTactic() == Tactic.DEFENSIVE && random.nextInt(100) < 45)
                 self.decision = Decision.WAIT;
             else self.decision = randomStrafe();
             return;
         }
         if (self.state == CombatState.BLOCKING) {
             if (enemyAttack && !self.blockDirection.blocks(enemy.attackDirection) &&
-                    self.guardSwitchCooldown <= 0 && operationSucceeds(self.stats.defenseTiming())) {
+                    self.guardSwitchCooldown <= 0 && operationSucceeds(self.getStats().defenseTiming())) {
                 switchGuard(self, enemy.attackDirection);
                 return;
             }
             if (enemyVisible && enemy.state == CombatState.RECOVERY && self.stateTime >= BLOCK_MIN_TIME &&
-                    random.nextInt(220) < self.stats.attackTiming() + self.stats.aggression()) {
+                    random.nextInt(220) < self.getStats().attackTiming() + self.getStats().aggression()) {
                 setState(self, CombatState.NEUTRAL);
                 beginAttack(self, enemy, perceivedDistance);
                 self.decision = Decision.RIPOSTE;
@@ -716,49 +713,49 @@ final class DuelSimulation {
         else if (visibleBait && self.observedBaitSequence != enemy.baitSequence &&
                 distance > 1.38 && distance < 1.82) {
             self.observedBaitSequence = enemy.baitSequence;
-            if (!operationSucceeds(self.stats.distanceControl())) beginBaitedAttack(self, enemy, distance);
-            else if (random.nextInt(300) < Math.clamp(self.stats.decisionMaking() + self.stats.footwork() +
-                    self.stats.aggression() + self.tactic.pressureBonus, 0, 300))
+            if (!operationSucceeds(self.getStats().distanceControl())) beginBaitedAttack(self, enemy, distance);
+            else if (random.nextInt(300) < Math.clamp(self.getStats().decisionMaking() + self.getStats().footwork() +
+                    self.getStats().aggression() + self.getTactic().pressureBonus, 0, 300))
                 beginBaitAdvanceAttack(self, enemy, distance);
             else self.decision = randomStrafe();
         }
         else if (enemyVisible && enemy.state == CombatState.RECOVERY && perceivedDistance < 2.02)
             beginAttack(self, perceivedDistance);
-        else if (enemyVisible && enemy.state == CombatState.RECOVERY) self.decision = switch (self.tactic) {
+        else if (enemyVisible && enemy.state == CombatState.RECOVERY) self.decision = switch (self.getTactic()) {
             case DEFENSIVE -> random.nextInt(100) < 70 ? Decision.WAIT : randomStrafe();
             case NEUTRAL -> random.nextBoolean() ? randomStrafe() : Decision.WAIT;
             case AGGRESSIVE -> Decision.APPROACH;
         };
         else if (enemyVisible && enemy.dezoneTime > 0 && enemy.dezoneStance != DezoneStance.HOLD &&
                 perceivedDistance > 1.45 &&
-                random.nextInt(100) < Math.clamp((self.stats.aggression() + self.stats.decisionMaking()) / 2 +
-                        self.tactic.followBonus, 0, 100))
+                random.nextInt(100) < Math.clamp((self.getStats().aggression() + self.getStats().decisionMaking()) / 2 +
+                        self.getTactic().followBonus, 0, 100))
             self.decision = Decision.APPROACH;
         else if (self.dezoneCooldown <= 0 && enemyVisible && enemy.state == CombatState.NEUTRAL &&
                 perceivedDistance > 1.30 && perceivedDistance < 2.80 &&
-                random.nextDouble() * 1000 < (self.stats.zoneExit() + self.stats.footwork() +
-                        self.stats.decisionMaking()) / 3.0 * self.tactic.dezoneMultiplier)
+                random.nextDouble() * 1000 < (self.getStats().zoneExit() + self.getStats().footwork() +
+                        self.getStats().decisionMaking()) / 3.0 * self.getTactic().dezoneMultiplier)
             beginDezone(self, perceivedDistance);
         else if (enemyVisible && enemy.state == CombatState.NEUTRAL &&
                 perceivedDistance > 1.50 && perceivedDistance < 2.05 &&
-                random.nextDouble() * 1000 < (self.stats.decisionMaking() + self.stats.distanceControl()) / 4.0 *
-                        self.tactic.baitMultiplier)
+                random.nextDouble() * 1000 < (self.getStats().decisionMaking() + self.getStats().distanceControl()) / 4.0 *
+                        self.getTactic().baitMultiplier)
             beginBait(self);
         else if (applyPlannedEngagement(self, enemy, perceivedDistance)) { }
-        else if (perceivedDistance > self.tactic.approachDistance) {
-            if (self.tactic == Tactic.DEFENSIVE && random.nextInt(100) < 70)
+        else if (perceivedDistance > self.getTactic().approachDistance) {
+            if (self.getTactic() == Tactic.DEFENSIVE && random.nextInt(100) < 70)
                 self.decision = random.nextInt(100) < 65 ? randomStrafe() : Decision.WAIT;
             else self.decision = Decision.APPROACH;
         }
         else if (perceivedDistance > 1.38 && perceivedDistance < 1.82 &&
-                random.nextDouble() * 1000 < (self.stats.aggression() + self.stats.decisionMaking()) / 3.0 *
-                        self.tactic.attackMultiplier)
+                random.nextDouble() * 1000 < (self.getStats().aggression() + self.getStats().decisionMaking()) / 3.0 *
+                        self.getTactic().attackMultiplier)
             beginAttack(self, perceivedDistance);
-        else self.decision = switch (self.tactic) {
-            case DEFENSIVE -> random.nextInt(100) < 55 ? Decision.WAIT : randomStrafe();
-            case NEUTRAL -> random.nextInt(100) < 78 ? randomStrafe() : Decision.WAIT;
-            case AGGRESSIVE -> random.nextInt(100) < 90 ? randomStrafe() : Decision.WAIT;
-        };
+        else self.decision = switch (self.getTactic()) {
+                case DEFENSIVE -> random.nextInt(100) < 55 ? Decision.WAIT : randomStrafe();
+                case NEUTRAL -> random.nextInt(100) < 78 ? randomStrafe() : Decision.WAIT;
+                case AGGRESSIVE -> random.nextInt(100) < 90 ? randomStrafe() : Decision.WAIT;
+            };
     }
 
     private Musketeer findFreeKillTarget(Musketeer self) {
@@ -770,7 +767,7 @@ final class DuelSimulation {
             if (Math.abs(angleDifference(self.weaponWorldAngle(), towardCandidate)) > Math.toRadians(100))
                 continue;
             var perceivedDistance = Math.max(0, Math.hypot(candidate.x - self.x, candidate.y - self.y) +
-                    random.nextGaussian() * (100 - self.stats.distanceControl()) * 0.006);
+                    random.nextGaussian() * (100 - self.getStats().distanceControl()) * 0.006);
             if (perceivedDistance > CombatDirection.UP.thrustLength + Musketeer.BODY_RADIUS + 0.10 ||
                     !believesDirectOpponentIsSafe(self, candidate)) continue;
             if (perceivedDistance < bestDistance) {
@@ -787,7 +784,7 @@ final class DuelSimulation {
                 isTracked(self, self.target) ? self.target : closestTrackedOpponentExcept(self, backstabTarget);
         if (directOpponent == null) return true;
         var perceivedDistance = Math.max(0, knownDistance(self, directOpponent) +
-                random.nextGaussian() * (100 - self.stats.distanceControl()) * 0.006);
+                random.nextGaussian() * (100 - self.getStats().distanceControl()) * 0.006);
         var dangerDistance = directOpponent.projectedThrustLength() + Musketeer.BODY_RADIUS + 0.55;
         if (isVisible(self, directOpponent) && (directOpponent.state == CombatState.ATTACK_PREPARE ||
                 directOpponent.state == CombatState.ATTACK_HOLD || directOpponent.isAttacking()))
@@ -813,9 +810,9 @@ final class DuelSimulation {
     }
 
     private double freeKillChoiceChance(Musketeer self) {
-        var readingSkill = (self.stats.decisionMaking() * 0.45 + self.stats.distanceControl() * 0.35 +
-                self.stats.aggression() * 0.20) / 100.0;
-        var tacticMultiplier = switch (self.tactic) {
+        var readingSkill = (self.getStats().decisionMaking() * 0.45 + self.getStats().distanceControl() * 0.35 +
+                self.getStats().aggression() * 0.20) / 100.0;
+        var tacticMultiplier = switch (self.getTactic()) {
             case DEFENSIVE -> 0.75;
             case NEUTRAL -> 1.0;
             case AGGRESSIVE -> 1.25;
@@ -843,10 +840,10 @@ final class DuelSimulation {
         self.punishingBait = false;
         self.exploitingBait = false;
         self.intendedZone = HitZone.TORSO;
-        var accurate = operationSucceeds(self.stats.aim());
+        var accurate = operationSucceeds(self.getStats().aim());
         self.attackHeight = HitZone.TORSO.centerHeight() +
-                random.nextGaussian() * (0.025 + (100 - self.stats.aim()) * 0.0045);
-        if (accurate) self.aimError = random.nextGaussian() * (101 - self.stats.aim()) * 0.0009;
+                random.nextGaussian() * (0.025 + (100 - self.getStats().aim()) * 0.0045);
+        if (accurate) self.aimError = random.nextGaussian() * (101 - self.getStats().aim()) * 0.0009;
         else if (random.nextBoolean()) {
             self.attackHeight -= 0.45 + random.nextDouble() * 0.75;
             self.aimError = random.nextGaussian() * 0.10;
@@ -861,7 +858,7 @@ final class DuelSimulation {
 
     private Decision defensiveMovement(Musketeer self, double distance) {
         if (nearBoundary(self) && distance > 1.28) return boundaryEscape(self);
-        return switch (self.tactic) {
+        return switch (self.getTactic()) {
             case DEFENSIVE -> distance < 1.35 || random.nextInt(100) < 60 ? Decision.RETREAT : randomStrafe();
             case NEUTRAL -> distance < 1.55 ? Decision.RETREAT : randomStrafe();
             case AGGRESSIVE -> distance < 1.30 ? Decision.RETREAT : randomStrafe();
@@ -893,7 +890,7 @@ final class DuelSimulation {
         stopBait(self);
         endDezone(self);
         self.backEscapeDirection = chooseBackEscapeDirection(self);
-        self.backEscapeTime = 0.40 + self.stats.footwork() * 0.0035 + self.stats.zoneExit() * 0.0015;
+        self.backEscapeTime = 0.40 + self.getStats().footwork() * 0.0035 + self.getStats().zoneExit() * 0.0015;
         setBackEscapeDecision(self);
     }
 
@@ -904,17 +901,17 @@ final class DuelSimulation {
 
     private int chooseBackEscapeDirection(Musketeer self) {
         var bestDirection = backEscapeScore(self, -1) > backEscapeScore(self, 1) ? -1 : 1;
-        var correctChoiceChance = 0.30 + self.stats.backProtection() * 0.0065;
+        var correctChoiceChance = 0.30 + self.getStats().backProtection() * 0.0065;
         return random.nextDouble() < correctChoiceChance ? bestDirection : -bestDirection;
     }
 
     private double backEscapeScore(Musketeer self, int direction) {
         var horizon = 0.80;
         var candidateX = Math.clamp(self.x +
-                (Math.cos(self.angle) * 0.55 - Math.sin(self.angle) * direction * 0.85) * horizon,
+                        (Math.cos(self.angle) * 0.55 - Math.sin(self.angle) * direction * 0.85) * horizon,
                 Musketeer.BODY_RADIUS, ARENA_WIDTH - Musketeer.BODY_RADIUS);
         var candidateY = Math.clamp(self.y +
-                (Math.sin(self.angle) * 0.55 + Math.cos(self.angle) * direction * 0.85) * horizon,
+                        (Math.sin(self.angle) * 0.55 + Math.cos(self.angle) * direction * 0.85) * horizon,
                 Musketeer.BODY_RADIUS, ARENA_HEIGHT - Musketeer.BODY_RADIUS);
         var boundarySpace = Math.min(Math.min(candidateX, ARENA_WIDTH - candidateX),
                 Math.min(candidateY, ARENA_HEIGHT - candidateY));
@@ -953,12 +950,12 @@ final class DuelSimulation {
                     isRearAttack(candidate, self);
             if (!supportsTeammate && !opening) continue;
             if (!believesDirectOpponentIsSafe(self, candidate) &&
-                    operationSucceeds(self.stats.decisionMaking())) continue;
+                    operationSucceeds(self.getStats().decisionMaking())) continue;
             var targetAngle = Math.atan2(candidate.y - self.y, candidate.x - self.x);
             var score = distance + Math.abs(angleDifference(self.angle, targetAngle)) * 0.22;
             if (supportsTeammate) score -= 0.55;
             if (opening) score -= 0.45;
-            score += random.nextGaussian() * (101 - self.stats.decisionMaking()) * 0.003;
+            score += random.nextGaussian() * (101 - self.getStats().decisionMaking()) * 0.003;
             if (score < bestScore) {
                 best = candidate;
                 bestScore = score;
@@ -968,8 +965,8 @@ final class DuelSimulation {
     }
 
     private double targetSwitchDezoneChance(Musketeer self) {
-        var ability = self.stats.targetSwitchDezoneAbility() / 100.0;
-        var tacticMultiplier = switch (self.tactic) {
+        var ability = self.getStats().targetSwitchDezoneAbility() / 100.0;
+        var tacticMultiplier = switch (self.getTactic()) {
             case DEFENSIVE -> 0.65;
             case NEUTRAL -> 1.0;
             case AGGRESSIVE -> 1.35;
@@ -980,7 +977,7 @@ final class DuelSimulation {
     private void beginTargetSwitchDezone(Musketeer self, Musketeer currentTarget, Musketeer switchTarget,
                                          double currentDistance) {
         stopBait(self);
-        var ability = self.stats.targetSwitchDezoneAbility();
+        var ability = self.getStats().targetSwitchDezoneAbility();
         self.dezoneOriginalTarget = currentTarget;
         self.dezoneSwitchTarget = switchTarget;
         self.dezoneSwitchCommitted = false;
@@ -993,8 +990,8 @@ final class DuelSimulation {
         self.dezoneMovement = right ? DezoneMovement.TARGET_SWITCH_RIGHT :
                 DezoneMovement.TARGET_SWITCH_LEFT;
 
-        var defenseWeight = self.stats.defenseTiming() + (self.tactic == Tactic.DEFENSIVE ? 40 : 0);
-        var attackWeight = self.stats.attackTiming() + (self.tactic == Tactic.AGGRESSIVE ? 40 : 0);
+        var defenseWeight = self.getStats().defenseTiming() + (self.getTactic() == Tactic.DEFENSIVE ? 40 : 0);
+        var attackWeight = self.getStats().attackTiming() + (self.getTactic() == Tactic.AGGRESSIVE ? 40 : 0);
         var stanceRoll = random.nextInt(100 + defenseWeight + attackWeight);
         if (stanceRoll < defenseWeight) {
             self.dezoneStance = DezoneStance.BLOCK;
@@ -1041,7 +1038,7 @@ final class DuelSimulation {
             return;
         }
         self.dezoneDangerTime += dt;
-        var responseDelay = 0.07 + (100 - self.stats.reaction()) * 0.0028;
+        var responseDelay = 0.07 + (100 - self.getStats().reaction()) * 0.0028;
         if (self.dezoneDangerTime < responseDelay || self.isAttacking()) return;
         cancelTargetSwitchDezone(self, true);
     }
@@ -1069,7 +1066,7 @@ final class DuelSimulation {
         var teammate = teammateOf(self);
         if (teammate != null && teammate.alive && teammate.target == switchTarget &&
                 (teammate.state == CombatState.ATTACK_PREPARE || teammate.state == CombatState.ATTACK_HOLD ||
-                        teammate.isAttacking()) && operationSucceeds(self.stats.decisionMaking()))
+                        teammate.isAttacking()) && operationSucceeds(self.getStats().decisionMaking()))
             direction = teammate.attackDirection.opposite();
         self.attackDirection = direction;
         configureAim(self, distance);
@@ -1102,19 +1099,19 @@ final class DuelSimulation {
 
     private void beginDezone(Musketeer self, double distance) {
         stopBait(self);
-        self.dezoneTime = 0.55 + 0.005 * self.stats.zoneExit() + random.nextDouble() * 0.45;
+        self.dezoneTime = 0.55 + 0.005 * self.getStats().zoneExit() + random.nextDouble() * 0.45;
         self.dezoneCooldown = self.dezoneTime + 0.80 + random.nextDouble() * 0.50;
-        if (distance <= 2.20 && random.nextDouble() < 0.45 - 0.0035 * self.stats.zoneExit())
+        if (distance <= 2.20 && random.nextDouble() < 0.45 - 0.0035 * self.getStats().zoneExit())
             self.dezoneMovement = DezoneMovement.BACKWARD;
         else {
             var left = random.nextBoolean();
-            if (random.nextDouble() < 0.45 + 0.004 * self.stats.zoneExit())
+            if (random.nextDouble() < 0.45 + 0.004 * self.getStats().zoneExit())
                 self.dezoneMovement = left ? DezoneMovement.ADVANCE_LEFT : DezoneMovement.ADVANCE_RIGHT;
             else self.dezoneMovement = left ? DezoneMovement.ORBIT_LEFT : DezoneMovement.ORBIT_RIGHT;
         }
 
-        var defenseWeight = self.stats.defenseTiming() + (self.tactic == Tactic.DEFENSIVE ? 40 : 0);
-        var attackWeight = self.stats.attackTiming() + (self.tactic == Tactic.AGGRESSIVE ? 40 : 0);
+        var defenseWeight = self.getStats().defenseTiming() + (self.getTactic() == Tactic.DEFENSIVE ? 40 : 0);
+        var attackWeight = self.getStats().attackTiming() + (self.getTactic() == Tactic.AGGRESSIVE ? 40 : 0);
         var stanceRoll = random.nextInt(100 + defenseWeight + attackWeight);
         if (stanceRoll < defenseWeight) {
             self.dezoneStance = DezoneStance.BLOCK;
@@ -1188,11 +1185,11 @@ final class DuelSimulation {
             }
         }
         if (self.lastCommittedAttackDirection != null && self.directionStreak >= 2) {
-            var mixup = self.stats.decisionMaking() / 100.0 * Math.min(1.0, self.directionStreak / 3.0);
+            var mixup = self.getStats().decisionMaking() / 100.0 * Math.min(1.0, self.directionStreak / 3.0);
             if (self.lastCommittedAttackDirection == CombatDirection.UP) upScore -= mixup;
             else downScore -= mixup;
         }
-        var decisionNoise = random.nextGaussian() * (101 - self.stats.decisionMaking()) * 0.012;
+        var decisionNoise = random.nextGaussian() * (101 - self.getStats().decisionMaking()) * 0.012;
         return upScore + decisionNoise >= downScore ? CombatDirection.UP : CombatDirection.DOWN;
     }
 
@@ -1201,12 +1198,12 @@ final class DuelSimulation {
         self.baitedAttack = false;
         self.punishingBait = false;
         self.exploitingBait = false;
-        var accurate = operationSucceeds(self.stats.aim());
+        var accurate = operationSucceeds(self.getStats().aim());
         self.intendedZone = self.attackDirection == CombatDirection.UP &&
-                random.nextInt(100) < 12 + self.stats.aim() / 5 ? HitZone.HEAD : HitZone.TORSO;
+                random.nextInt(100) < 12 + self.getStats().aim() / 5 ? HitZone.HEAD : HitZone.TORSO;
         self.attackHeight = self.intendedZone.centerHeight() +
-                random.nextGaussian() * (0.025 + (100 - self.stats.aim()) * 0.0045);
-        if (accurate) self.aimError = random.nextGaussian() * (101 - self.stats.aim()) * 0.0009;
+                random.nextGaussian() * (0.025 + (100 - self.getStats().aim()) * 0.0045);
+        if (accurate) self.aimError = random.nextGaussian() * (101 - self.getStats().aim()) * 0.0009;
         else if (random.nextBoolean()) {
             self.attackHeight -= 0.45 + random.nextDouble() * 0.75;
             self.aimError = random.nextGaussian() * 0.10;
@@ -1221,7 +1218,7 @@ final class DuelSimulation {
     }
 
     private void configureAttackManipulation(Musketeer self, double distance) {
-        var ability = self.stats.manipulationAbility();
+        var ability = self.getStats().manipulationAbility();
         var chance = Math.min(0.72, 0.08 + ability * 0.0062);
         if (random.nextDouble() >= chance) {
             self.attackManipulation = AttackManipulation.NEUTRAL;
@@ -1230,8 +1227,8 @@ final class DuelSimulation {
             return;
         }
         var accelBias = distance < 1.50 ? 0.64 : 0.42;
-        if (self.tactic == Tactic.AGGRESSIVE) accelBias += 0.14;
-        else if (self.tactic == Tactic.DEFENSIVE) accelBias -= 0.12;
+        if (self.getTactic() == Tactic.AGGRESSIVE) accelBias += 0.14;
+        else if (self.getTactic() == Tactic.DEFENSIVE) accelBias -= 0.12;
         self.attackManipulation = random.nextDouble() < accelBias ?
                 AttackManipulation.ACCEL : AttackManipulation.DRAG;
         var degrees = 7 + ability * 0.13;
@@ -1245,7 +1242,7 @@ final class DuelSimulation {
         stopBait(self);
         if (self.dezoneTime > 0) self.dezoneStance = DezoneStance.BLOCK;
         self.decision = Decision.BLOCK;
-        var blockSkill = self.stats.defenseTiming();
+        var blockSkill = self.getStats().defenseTiming();
         if (enemy.chamberType == ChamberType.SIMPLE && enemy.chamberChain > 0)
             blockSkill = Math.min(100, blockSkill + enemy.chamberChain * CHAMBER_BLOCK_BONUS);
         BlockDirection direction;
@@ -1271,23 +1268,23 @@ final class DuelSimulation {
     private void prepareGuard(Musketeer self, BlockDirection direction, boolean switching) {
         self.blockDirection = direction;
         self.guardSwitching = switching;
-        self.guardPrepareTime = 0.035 + (100 - self.stats.defenseTiming()) * 0.00115;
-        self.guardHoldTime = 0.28 + self.stats.defenseTiming() * 0.006 + random.nextDouble() * 0.18 +
-                (self.tactic == Tactic.DEFENSIVE ? 0.25 : self.tactic == Tactic.AGGRESSIVE ? -0.08 : 0);
+        self.guardPrepareTime = 0.035 + (100 - self.getStats().defenseTiming()) * 0.00115;
+        self.guardHoldTime = 0.28 + self.getStats().defenseTiming() * 0.006 + random.nextDouble() * 0.18 +
+                (self.getTactic() == Tactic.DEFENSIVE ? 0.25 : self.getTactic() == Tactic.AGGRESSIVE ? -0.08 : 0);
         ++self.blockSequence;
         setState(self, CombatState.BLOCK_PREPARE);
     }
 
     private void switchGuard(Musketeer self, CombatDirection attackDirection) {
         self.decision = Decision.SWITCH_GUARD;
-        self.guardSwitchCooldown = 0.16 + (100 - self.stats.reaction()) * 0.0016;
+        self.guardSwitchCooldown = 0.16 + (100 - self.getStats().reaction()) * 0.0016;
         prepareGuard(self, BlockDirection.matching(attackDirection), true);
     }
 
     private boolean shouldFeintToBlock(Musketeer self, Musketeer enemy, boolean enemyThreat, double distance) {
         if (!enemyThreat || self.feintCooldown > 0 || self.feintCount >= 2 || self.stateTime < 0.08 ||
                 distance > enemy.projectedThrustLength() + Musketeer.BODY_RADIUS + 0.35) return false;
-        var defense = (self.stats.defenseTiming() + self.stats.reaction() + self.stats.decisionMaking()) / 3.0;
+        var defense = (self.getStats().defenseTiming() + self.getStats().reaction() + self.getStats().decisionMaking()) / 3.0;
         return random.nextDouble() < 0.04 + defense * 0.0015;
     }
 
@@ -1297,10 +1294,10 @@ final class DuelSimulation {
         var guardReadsAttack = enemy.isGuarding() && enemy.blockDirection.blocks(self.attackDirection);
         var repetition = self.directionStreak >= 2;
         if (!guardReadsAttack && !repetition) return false;
-        var chance = 0.025 + self.stats.feintAbility() * 0.00155;
+        var chance = 0.025 + self.getStats().feintAbility() * 0.00155;
         if (guardReadsAttack) chance += 0.07;
-        if (self.tactic == Tactic.AGGRESSIVE) chance *= 1.20;
-        else if (self.tactic == Tactic.DEFENSIVE) chance *= 0.75;
+        if (self.getTactic() == Tactic.AGGRESSIVE) chance *= 1.20;
+        else if (self.getTactic() == Tactic.DEFENSIVE) chance *= 0.75;
         return random.nextDouble() < chance;
     }
 
@@ -1308,7 +1305,7 @@ final class DuelSimulation {
         ++self.feintCount;
         self.feintToBlock = toBlock;
         self.queuedAttackDirection = self.attackDirection.opposite();
-        self.feintDuration = 0.07 + (100 - self.stats.feintAbility()) * 0.00125;
+        self.feintDuration = 0.07 + (100 - self.getStats().feintAbility()) * 0.00125;
         self.feintCooldown = 0.34 + random.nextDouble() * 0.22;
         self.attackManipulation = AttackManipulation.NEUTRAL;
         self.manipulationPitchOffset = 0;
@@ -1321,9 +1318,9 @@ final class DuelSimulation {
         stopBait(self);
         endDezone(self);
         self.attackDirection = enemy.attackDirection;
-        self.chamberType = self.stats.chamber() > 90 && random.nextInt(100) < self.stats.chamber() - 90 ?
+        self.chamberType = self.getStats().chamber() > 90 && random.nextInt(100) < self.getStats().chamber() - 90 ?
                 ChamberType.PERFECT : ChamberType.SIMPLE;
-        var timingSkill = (self.stats.attackTiming() + self.stats.reaction() + self.stats.decisionMaking()) / 3.0;
+        var timingSkill = (self.getStats().attackTiming() + self.getStats().reaction() + self.getStats().decisionMaking()) / 3.0;
         self.chamberTimingError = random.nextGaussian() * Math.max(0.012, 0.060 - 0.00045 * timingSkill);
         self.attackPitch = self.pitch;
         self.baseAttackPitch = self.pitch;
@@ -1355,9 +1352,9 @@ final class DuelSimulation {
         else {
             defender.intendedZone = HitZone.TORSO;
             defender.attackHeight = HitZone.TORSO.centerHeight() + random.nextGaussian() *
-                    (0.06 + (100 - defender.stats.footwork()) * 0.002);
+                    (0.06 + (100 - defender.getStats().footwork()) * 0.002);
             defender.aimError = random.nextGaussian() *
-                    (0.05 + (100 - defender.stats.footwork()) * 0.002);
+                    (0.05 + (100 - defender.getStats().footwork()) * 0.002);
             defender.desiredPitch = Math.clamp(Math.atan2(defender.attackHeight - WEAPON_HEIGHT,
                     Math.max(0.25, distance)), -Musketeer.MAX_PITCH, Musketeer.MAX_PITCH);
         }
@@ -1373,7 +1370,7 @@ final class DuelSimulation {
             var facingQuality = Math.max(0, 1 - Math.abs(angleDifference(defender.weaponWorldAngle(),
                     Math.atan2(attacker.y - defender.y, attacker.x - defender.x))) / 0.40);
             defender.simpleChamberLethal = random.nextDouble() <
-                    defender.stats.footwork() / 500.0 * distanceQuality * facingQuality;
+                    defender.getStats().footwork() / 500.0 * distanceQuality * facingQuality;
             setState(attacker, CombatState.NEUTRAL);
             attacker.decisionTime = 0;
             attacker.threatSeen = false;
@@ -1480,7 +1477,7 @@ final class DuelSimulation {
         var enemyX = knownX(self, observedEnemy);
         var enemyY = knownY(self, observedEnemy);
         if (self.engagementPhase == EngagementPhase.COMMIT && isVisible(self, observedEnemy)) {
-            var leadTime = 0.06 + self.stats.decisionMaking() * 0.0014;
+            var leadTime = 0.06 + self.getStats().decisionMaking() * 0.0014;
             enemyX += observedEnemy.velocityX * leadTime;
             enemyY += observedEnemy.velocityY * leadTime;
         }
@@ -1504,7 +1501,7 @@ final class DuelSimulation {
             self.desiredPitch = Math.clamp(Math.atan2(self.attackHeight - WEAPON_HEIGHT, Math.max(0.25, distance)),
                     -Musketeer.MAX_PITCH, Musketeer.MAX_PITCH);
         else self.desiredPitch = Math.atan2(HitZone.TORSO.centerHeight() - WEAPON_HEIGHT, Math.max(0.25, distance));
-        var pitchSpeed = 1.2 + self.stats.footwork() * 0.012;
+        var pitchSpeed = 1.2 + self.getStats().footwork() * 0.012;
         self.pitch += Math.clamp(self.desiredPitch - self.pitch, -pitchSpeed * dt, pitchSpeed * dt);
         self.pitch = Math.clamp(self.pitch, -Musketeer.MAX_PITCH, Musketeer.MAX_PITCH);
         updateAttackManipulation(self, dt);
@@ -1513,7 +1510,7 @@ final class DuelSimulation {
         var targetAngle = self.backEscapeTime > 0 ? backProtectionFacing(self, enemyAngle) : enemyAngle;
         if (self.engagementPhase == EngagementPhase.PASS_THROUGH)
             targetAngle += self.engagementSide * Math.toRadians(18);
-        var turnSpeed = 2.4 + self.stats.footwork() * 0.018;
+        var turnSpeed = 2.4 + self.getStats().footwork() * 0.018;
         if (self.isAttacking()) turnSpeed *= 0.62;
         else if (self.state == CombatState.RECOVERY) turnSpeed *= 0.52;
         else if (self.isGuarding()) turnSpeed *= 0.68;
@@ -1525,14 +1522,14 @@ final class DuelSimulation {
         else if (self.isAttacking()) weaponTargetAngle += self.manipulationYawOffset * manipulationCurve(self);
         self.desiredWeaponYaw = Math.clamp(angleDifference(self.angle, weaponTargetAngle),
                 -Musketeer.MAX_WEAPON_YAW, Musketeer.MAX_WEAPON_YAW);
-        var weaponTurnSpeed = 3.4 + self.stats.footwork() * 0.018;
+        var weaponTurnSpeed = 3.4 + self.getStats().footwork() * 0.018;
         if (self.isAttacking()) weaponTurnSpeed *= 0.55;
         else if (self.state == CombatState.RECOVERY) weaponTurnSpeed *= 0.44;
         self.weaponYaw += Math.clamp(self.desiredWeaponYaw - self.weaponYaw,
                 -weaponTurnSpeed * dt, weaponTurnSpeed * dt);
         self.weaponYaw = Math.clamp(self.weaponYaw, -Musketeer.MAX_WEAPON_YAW, Musketeer.MAX_WEAPON_YAW);
 
-        var speed = 1.05 + self.stats.footwork() * 0.006;
+        var speed = 1.05 + self.getStats().footwork() * 0.006;
         if (self.isAttacking()) speed *= 0.86;
         else if (self.state == CombatState.RECOVERY) speed *= 0.92;
         else if (self.state == CombatState.FEINT) speed *= 0.84;
@@ -1568,7 +1565,7 @@ final class DuelSimulation {
         else
             switch (self.decision) {
                 case APPROACH, PREPARE_ATTACK, RELEASE_ATTACK, DEZONE_SWITCH_ATTACK, RIPOSTE,
-                        FREE_KILL_BACKSTAB -> forward = 1;
+                     FREE_KILL_BACKSTAB -> forward = 1;
                 case CHAMBER -> {
                     if (self.isAttacking()) forward = 1;
                 }
@@ -1615,7 +1612,7 @@ final class DuelSimulation {
         if (!self.isAttacking()) return;
         var targetPitch = Math.clamp(self.baseAttackPitch +
                 self.manipulationPitchOffset * manipulationCurve(self), -Musketeer.MAX_PITCH, Musketeer.MAX_PITCH);
-        var speed = 2.2 + self.stats.manipulationAbility() * 0.018;
+        var speed = 2.2 + self.getStats().manipulationAbility() * 0.018;
         self.attackPitch += Math.clamp(targetPitch - self.attackPitch, -speed * dt, speed * dt);
     }
 
@@ -1627,7 +1624,7 @@ final class DuelSimulation {
     }
 
     private double movementAcceleration(Musketeer self) {
-        var acceleration = 4.6 + self.stats.footwork() * 0.045;
+        var acceleration = 4.6 + self.getStats().footwork() * 0.045;
         if (self.isAttacking()) acceleration *= 0.72;
         else if (self.state == CombatState.RECOVERY) acceleration *= 0.64;
         return acceleration;
@@ -1647,7 +1644,7 @@ final class DuelSimulation {
         self.velocityY += deltaY;
         if (Math.hypot(desiredX, desiredY) < 0.001) {
             var speed = Math.hypot(self.velocityX, self.velocityY);
-            var remaining = Math.max(0, speed - (3.2 + self.stats.footwork() * 0.018) * dt);
+            var remaining = Math.max(0, speed - (3.2 + self.getStats().footwork() * 0.018) * dt);
             if (speed > 0.0001) {
                 self.velocityX *= remaining / speed;
                 self.velocityY *= remaining / speed;
@@ -1783,7 +1780,7 @@ final class DuelSimulation {
                     PERFECT_CHAMBER_WINDOW : SIMPLE_CHAMBER_WINDOW;
             if (Math.abs(angleDifference(defender.weaponWorldAngle(), towardAttacker)) < Math.toRadians(75) &&
                     Math.abs(defender.chamberTimingError) <= chamberWindow &&
-                    (defender.chamberType != ChamberType.PERFECT || defender.stats.chamber() > 90)) {
+                    (defender.chamberType != ChamberType.PERFECT || defender.getStats().chamber() > 90)) {
                 beginChamberReturn(defender, attacker);
                 return;
             }
@@ -1840,7 +1837,7 @@ final class DuelSimulation {
             break;
         }
         if (secondAttacker == null) return;
-        var ability = defender.stats.doubleBlockAbility();
+        var ability = defender.getStats().doubleBlockAbility();
         if (random.nextDouble() >= Math.pow(ability / 100.0, 3)) return;
         endDezone(defender);
         defender.doubleBlockThreat = secondAttacker;
@@ -1879,9 +1876,9 @@ final class DuelSimulation {
     private void updateWinner() {
         var blueAlive = teamAlive(blueTeam);
         var redAlive = teamAlive(redTeam);
-        if (!blueAlive && !redAlive) winningTeam = DRAW;
-        else if (!blueAlive) winningTeam = RED_TEAM;
-        else if (!redAlive) winningTeam = BLUE_TEAM;
+        if (!blueAlive && !redAlive) winningTeam = Team.DRAW;
+        else if (!blueAlive) winningTeam = Team.RED;
+        else if (!redAlive) winningTeam = Team.BLUE;
     }
 
     private boolean teamAlive(Musketeer[] team) {

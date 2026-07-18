@@ -8,22 +8,18 @@ record AgentConfiguration(String name, AgentStats stats, Tactic tactic) {
     }
 
     static AgentConfiguration defaultBlue() {
-        return new AgentConfiguration("Agent bleu 1", new AgentStats(78, 81, 72, 70, 64, 64, 58, 76, 74, 74, 62),
-                Tactic.NEUTRAL);
+        return new AgentConfiguration("Agent bleu 1", new AgentStats(90, 90, 90, 90, 90, 90, 90, 90, 90, 90, 90), Tactic.NEUTRAL);
     }
 
     static AgentConfiguration defaultBlueTwo() {
-        return new AgentConfiguration("Agent bleu 2", new AgentStats(68, 76, 75, 66, 72, 71, 63, 74, 81, 67, 78),
-                Tactic.DEFENSIVE);
+        return new AgentConfiguration("Agent bleu 2", new AgentStats(90, 90, 90, 90, 90, 90, 90, 90, 90, 90, 90), Tactic.DEFENSIVE);
     }
 
     static AgentConfiguration defaultRed() {
-        return new AgentConfiguration("Agent rouge 1", new AgentStats(55, 62, 84, 68, 82, 82, 72, 65, 56, 93, 74),
-                Tactic.NEUTRAL);
+        return new AgentConfiguration("Agent rouge 1", new AgentStats(90, 90, 90, 90, 90, 90, 90, 90, 90, 90, 90), Tactic.NEUTRAL);
     }
 
     static AgentConfiguration defaultRedTwo() {
-        return new AgentConfiguration("Agent rouge 2", new AgentStats(74, 69, 70, 79, 61, 68, 81, 73, 70, 64, 58),
-                Tactic.AGGRESSIVE);
+        return new AgentConfiguration("Agent rouge 2", new AgentStats(90, 90, 90, 90, 90, 90, 90, 90, 90, 90, 90), Tactic.AGGRESSIVE);
     }
 }

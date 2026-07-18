@@ -238,7 +238,7 @@ public final class MapPanel extends JPanel {
         g.setColor(new Color(55, 48, 42));
         g.setFont(getFont().deriveFont(Font.BOLD, 12f));
         g.drawString(text("Vie : ", "生命：") + agent.hitPoints + " / 100", x + 13, y + 57);
-        var tacticText = text("T : ", "戰術：") + agent.tactic.label(language);
+        var tacticText = text("T : ", "戰術：") + agent.getTactic().label(language);
         g.setFont(getFont().deriveFont(Font.BOLD, 10f));
         g.drawString(tacticText, x + INFO_WIDTH - 13 - g.getFontMetrics().stringWidth(tacticText), y + 57);
         g.setColor(new Color(215, 205, 188));
@@ -247,17 +247,17 @@ public final class MapPanel extends JPanel {
         g.fillRoundRect(x + 13, y + 66, (INFO_WIDTH - 26) * agent.hitPoints / 100, 9, 9, 9);
         g.setColor(new Color(55, 48, 42));
         g.setFont(getFont().deriveFont(Font.PLAIN, 11f));
-        compactStat(g, text("Jambes", "步法"), agent.stats.footwork(), x + 13, y + 96);
-        compactStat(g, text("Distance", "距離"), agent.stats.distanceControl(), x + 13, y + 112);
-        compactStat(g, text("Précision", "瞄準"), agent.stats.aim(), x + 13, y + 128);
-        compactStat(g, text("Attaque", "進攻"), agent.stats.attackTiming(), x + 13, y + 144);
-        compactStat(g, text("Défense", "防守"), agent.stats.defenseTiming(), x + 13, y + 160);
-        compactStat(g, text("Double block", "雙重格擋"), agent.stats.doubleBlock(), x + 13, y + 176);
-        compactStat(g, text("Réaction", "反應"), agent.stats.reaction(), x + 120, y + 96);
-        compactStat(g, text("Agressivité", "攻擊性"), agent.stats.aggression(), x + 120, y + 112);
-        compactStat(g, text("Décision", "決策"), agent.stats.decisionMaking(), x + 120, y + 128);
-        compactStat(g, text("Dézonage", "脫離"), agent.stats.zoneExit(), x + 120, y + 144);
-        compactStat(g, text("Chamber", "接招"), agent.stats.chamber(), x + 120, y + 160);
+        compactStat(g, text("Jambes", "步法"), agent.getStats().footwork(), x + 13, y + 96);
+        compactStat(g, text("Distance", "距離"), agent.getStats().distanceControl(), x + 13, y + 112);
+        compactStat(g, text("Précision", "瞄準"), agent.getStats().aim(), x + 13, y + 128);
+        compactStat(g, text("Attaque", "進攻"), agent.getStats().attackTiming(), x + 13, y + 144);
+        compactStat(g, text("Défense", "防守"), agent.getStats().defenseTiming(), x + 13, y + 160);
+        compactStat(g, text("Double block", "雙重格擋"), agent.getStats().doubleBlock(), x + 13, y + 176);
+        compactStat(g, text("Réaction", "反應"), agent.getStats().reaction(), x + 120, y + 96);
+        compactStat(g, text("Agressivité", "攻擊性"), agent.getStats().aggression(), x + 120, y + 112);
+        compactStat(g, text("Décision", "決策"), agent.getStats().decisionMaking(), x + 120, y + 128);
+        compactStat(g, text("Dézonage", "脫離"), agent.getStats().zoneExit(), x + 120, y + 144);
+        compactStat(g, text("Chamber", "接招"), agent.getStats().chamber(), x + 120, y + 160);
 
         g.setFont(getFont().deriveFont(Font.BOLD, 11f));
         var stateText = text("État : ", "狀態：") + agent.state.label(language) + " · " +
@@ -273,7 +273,7 @@ public final class MapPanel extends JPanel {
                 text("Distance : %.2f m", "距離：%.2f 公尺").formatted(
                         Math.hypot(target.x - agent.x, target.y - agent.y));
         g.drawString(distanceText, x + 13, y + 264);
-        var backProtectionText = text("Dos : ", "護背：") + agent.stats.backProtection();
+        var backProtectionText = text("Dos : ", "護背：") + agent.getStats().backProtection();
         g.setColor(agent.backExposed ? new Color(190, 45, 45) : new Color(55, 48, 42));
         g.drawString(backProtectionText,
                 x + INFO_WIDTH - 13 - g.getFontMetrics().stringWidth(backProtectionText), y + 264);
@@ -325,11 +325,10 @@ public final class MapPanel extends JPanel {
     private void paintHeader(Graphics2D g) {
         g.setColor(new Color(55, 48, 42));
         g.setFont(getFont().deriveFont(Font.BOLD, 25f));
-        var title = switch (simulation.winningTeam) {
-            case DuelSimulation.BLUE_TEAM -> blueTeamName + text(" gagne !", "勝利！");
-            case DuelSimulation.RED_TEAM -> redTeamName + text(" gagne !", "勝利！");
-            case DuelSimulation.DRAW -> text("Match nul !", "平手！");
-            default -> blueTeamName + "  VS  " + redTeamName;
+        var title = simulation.winningTeam == null ? blueTeamName + "  VS  " + redTeamName : switch (simulation.winningTeam) {
+            case BLUE -> blueTeamName + text(" gagne !", "勝利！");
+            case RED -> redTeamName + text(" gagne !", "勝利！");
+            case DRAW -> text("Match nul !", "平手！");
         };
         g.drawString(title, (getWidth() - g.getFontMetrics().stringWidth(title)) / 2, 39);
         g.setFont(getFont().deriveFont(Font.BOLD, 13f));
