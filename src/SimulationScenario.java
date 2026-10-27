@@ -1,0 +1,8 @@
+enum SimulationScenario {
+    MODERN_2V2,
+    MODERN_3V3,
+    LEGACY_2V2,
+    CONTROLLED_2V1,
+    CONTROLLED_2V2,
+    CONTROLLED_3V3
+}

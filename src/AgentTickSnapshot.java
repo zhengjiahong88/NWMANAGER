@@ -1,0 +1,23 @@
+record AgentTickSnapshot(
+        String agentId,
+        Pos position,
+        Pos velocity,
+        double bodyAngle,
+        double weaponAngle,
+        CombatState combatState,
+        String actionState,
+        String targetId,
+        String primaryThreatId,
+        String secondaryThreatId,
+        String peripheralThreatId,
+        String formationRole,
+        String approachRole,
+        String teamManeuver,
+        String localManeuver,
+        int viableIncomingCoverLinks,
+        int viableOutgoingCoverLinks,
+        String attackOpportunityReason,
+        boolean attackOpportunityViable,
+        SteeringContributionSnapshot steering
+) {
+}

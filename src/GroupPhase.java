@@ -1,0 +1,10 @@
+enum GroupPhase {
+    APPROACH,
+    HOLD_SHAPE,
+    ROTATE,
+    ATTACK_COMMITTED,
+    REVENGE_WINDOW,
+    COUNTER_COVER,
+    RECOVER_SHAPE,
+    BROKEN
+}

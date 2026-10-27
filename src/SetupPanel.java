@@ -9,20 +9,40 @@ final class SetupPanel extends JPanel {
             new Color(48, 112, 220), AgentConfiguration.defaultBlue());
     private final PlayerEditorPanel blueTwoEditor = new PlayerEditorPanel("JOUEUR BLEU 2", "藍方玩家 2",
             new Color(40, 151, 184), AgentConfiguration.defaultBlueTwo());
+    private final PlayerEditorPanel blueThreeEditor = new PlayerEditorPanel("JOUEUR BLEU 3", "藍方玩家 3",
+            new Color(31, 171, 144), AgentConfiguration.defaultBlueThree());
     private final PlayerEditorPanel redOneEditor = new PlayerEditorPanel("JOUEUR ROUGE 1", "紅方玩家 1",
             new Color(215, 62, 65), AgentConfiguration.defaultRed());
     private final PlayerEditorPanel redTwoEditor = new PlayerEditorPanel("JOUEUR ROUGE 2", "紅方玩家 2",
             new Color(221, 111, 48), AgentConfiguration.defaultRedTwo());
+    private final PlayerEditorPanel redThreeEditor = new PlayerEditorPanel("JOUEUR ROUGE 3", "紅方玩家 3",
+            new Color(192, 75, 126), AgentConfiguration.defaultRedThree());
     private final JLabel titleLabel = new JLabel(), subtitleLabel = new JLabel(), hintLabel = new JLabel(),
             stepLabel = new JLabel(), blueTeamNameLabel = new JLabel(), redTeamNameLabel = new JLabel();
     private final JTextField blueTeamNameField = new JTextField(), redTeamNameField = new JTextField();
     private final JButton languageButton = new JButton(), startButton = new JButton(), backButton = new JButton();
     private final JTabbedPane teamTabs = new JTabbedPane();
     private UiLanguage language;
+    private final boolean threeVsThree;
+    private final StartHandler startHandler;
+    private final Start3Handler start3Handler;
 
     SetupPanel(UiLanguage language, StartHandler startHandler, BackHandler backHandler) {
+        this(language, startHandler, null, backHandler, false);
+    }
+
+    SetupPanel(UiLanguage language, Start3Handler startHandler, BackHandler backHandler, int playerCount) {
+        this(language, null, startHandler, backHandler, playerCount == 3);
+        if (playerCount != 3) throw new IllegalArgumentException("Le mode expérimental exige trois joueurs par équipe.");
+    }
+
+    private SetupPanel(UiLanguage language, StartHandler startHandler, Start3Handler start3Handler,
+                       BackHandler backHandler, boolean threeVsThree) {
         this.language = language;
-        setPreferredSize(new Dimension(880, 790));
+        this.startHandler = startHandler;
+        this.start3Handler = start3Handler;
+        this.threeVsThree = threeVsThree;
+        setPreferredSize(new Dimension(1320, 690));
         setLayout(new BorderLayout(24, 14));
         setBackground(new Color(238, 214, 175));
         setBorder(new EmptyBorder(24, 28, 22, 28));
@@ -57,8 +77,12 @@ final class SetupPanel extends JPanel {
         teamTabs.setFont(teamTabs.getFont().deriveFont(Font.BOLD, 14f));
         blueTeamNameField.setText(language.text("Mousquetaires bleus", "藍色火槍隊"));
         redTeamNameField.setText(language.text("Garde rouge", "紅色近衛隊"));
-        teamTabs.addTab("", createTeamPanel(blueTeamNameLabel, blueTeamNameField, blueOneEditor, blueTwoEditor));
-        teamTabs.addTab("", createTeamPanel(redTeamNameLabel, redTeamNameField, redOneEditor, redTwoEditor));
+        teamTabs.addTab("", threeVsThree
+                ? createTeamPanel(blueTeamNameLabel, blueTeamNameField, blueOneEditor, blueTwoEditor, blueThreeEditor)
+                : createTeamPanel(blueTeamNameLabel, blueTeamNameField, blueOneEditor, blueTwoEditor));
+        teamTabs.addTab("", threeVsThree
+                ? createTeamPanel(redTeamNameLabel, redTeamNameField, redOneEditor, redTwoEditor, redThreeEditor)
+                : createTeamPanel(redTeamNameLabel, redTeamNameField, redOneEditor, redTwoEditor));
         add(teamTabs, BorderLayout.CENTER);
 
         var footer = new JPanel();
@@ -80,7 +104,7 @@ final class SetupPanel extends JPanel {
         startButton.setFocusPainted(false);
         startButton.setPreferredSize(new Dimension(250, 46));
         startButton.setMaximumSize(new Dimension(250, 46));
-        startButton.addActionListener(event -> start(startHandler));
+        startButton.addActionListener(event -> start());
         buttonRow.add(Box.createHorizontalGlue());
         buttonRow.add(backButton);
         buttonRow.add(Box.createHorizontalStrut(14));
@@ -110,7 +134,7 @@ final class SetupPanel extends JPanel {
     }
 
     private JPanel createTeamPanel(JLabel teamNameLabel, JTextField teamNameField,
-                                   PlayerEditorPanel first, PlayerEditorPanel second) {
+                                   PlayerEditorPanel... editors) {
         var panel = new JPanel(new BorderLayout(0, 13));
         panel.setBackground(new Color(238, 214, 175));
         panel.setBorder(new EmptyBorder(14, 0, 0, 0));
@@ -122,10 +146,9 @@ final class SetupPanel extends JPanel {
         teamNameField.setFont(teamNameField.getFont().deriveFont(Font.BOLD, 14f));
         teamIdentity.add(teamNameField, BorderLayout.CENTER);
         panel.add(teamIdentity, BorderLayout.NORTH);
-        var players = new JPanel(new GridLayout(1, 2, 22, 0));
+        var players = new JPanel(new GridLayout(1, editors.length, 22, 0));
         players.setOpaque(false);
-        players.add(first);
-        players.add(second);
+        for (var editor : editors) players.add(editor);
         panel.add(players, BorderLayout.CENTER);
         return panel;
     }
@@ -146,8 +169,10 @@ final class SetupPanel extends JPanel {
                 "開始遊戲  ›  友誼賽  ›  建立隊伍"));
         titleLabel.setText(language.text("CRÉATION DES ÉQUIPES", "建立兩支隊伍"));
         subtitleLabel.setText(language.text(
-                "Nommez chaque équipe, puis configurez ses deux joueurs.",
-                "為兩支隊伍命名，並設定各自的兩名玩家。"));
+                threeVsThree ? "Nommez chaque équipe, puis configurez ses trois joueurs."
+                        : "Nommez chaque équipe, puis configurez ses deux joueurs.",
+                threeVsThree ? "為兩支隊伍命名，並設定各自的三名玩家。"
+                        : "為兩支隊伍命名，並設定各自的兩名玩家。"));
         languageButton.setText(language == UiLanguage.FRENCH ? "中文" : "Français");
         languageButton.setToolTipText(language.text("Changer la langue", "切換語言"));
         startButton.setText(language.text("JOUER LE MATCH", "開始比賽"));
@@ -163,12 +188,22 @@ final class SetupPanel extends JPanel {
         teamTabs.setForegroundAt(1, new Color(184, 45, 48));
         blueOneEditor.setLanguage(language);
         blueTwoEditor.setLanguage(language);
+        blueThreeEditor.setLanguage(language);
         redOneEditor.setLanguage(language);
         redTwoEditor.setLanguage(language);
+        redThreeEditor.setLanguage(language);
     }
 
-    private void start(StartHandler startHandler) {
+    private void start() {
         try {
+            if (threeVsThree) {
+                var blueTeam = teamConfiguration3(blueTeamNameField, blueOneEditor, blueTwoEditor, blueThreeEditor,
+                        language.text("bleue", "藍隊"));
+                var redTeam = teamConfiguration3(redTeamNameField, redOneEditor, redTwoEditor, redThreeEditor,
+                        language.text("rouge", "紅隊"));
+                start3Handler.start(blueTeam, redTeam, language);
+                return;
+            }
             var blueTeam = teamConfiguration(blueTeamNameField, blueOneEditor, blueTwoEditor,
                     language.text("bleue", "藍隊"));
             var redTeam = teamConfiguration(redTeamNameField, redOneEditor, redTwoEditor,
@@ -184,8 +219,20 @@ final class SetupPanel extends JPanel {
         }
     }
 
+    private TeamConfiguration3 teamConfiguration3(JTextField nameField, PlayerEditorPanel first,
+                                                   PlayerEditorPanel second, PlayerEditorPanel third,
+                                                   String teamLabel) throws ParseException {
+        var name = validTeamName(nameField, teamLabel);
+        return new TeamConfiguration3(name, first.configuration(), second.configuration(), third.configuration());
+    }
+
     private TeamConfiguration teamConfiguration(JTextField nameField, PlayerEditorPanel first,
                                                 PlayerEditorPanel second, String teamLabel) throws ParseException {
+        var name = validTeamName(nameField, teamLabel);
+        return new TeamConfiguration(name, first.configuration(), second.configuration());
+    }
+
+    private String validTeamName(JTextField nameField, String teamLabel) {
         var name = nameField.getText().strip();
         if (name.isEmpty())
             throw new IllegalArgumentException(language.text("Le nom de l'équipe " + teamLabel + " est obligatoire.",
@@ -193,12 +240,17 @@ final class SetupPanel extends JPanel {
         if (name.length() > 24)
             throw new IllegalArgumentException(language.text("Le nom de l'équipe " + teamLabel +
                     " est limité à 24 caractères.", teamLabel + "名稱不得超過 24 個字元。"));
-        return new TeamConfiguration(name, first.configuration(), second.configuration());
+        return name;
     }
 
     @FunctionalInterface
     interface StartHandler {
         void start(TeamConfiguration blueTeam, TeamConfiguration redTeam, UiLanguage language);
+    }
+
+    @FunctionalInterface
+    interface Start3Handler {
+        void start(TeamConfiguration3 blueTeam, TeamConfiguration3 redTeam, UiLanguage language);
     }
 
     @FunctionalInterface

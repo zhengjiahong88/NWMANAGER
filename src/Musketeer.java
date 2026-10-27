@@ -1,70 +1,164 @@
 import java.awt.*;
 import java.awt.geom.Path2D;
+import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.IdentityHashMap;
 
 final class Musketeer {
-    static final double BODY_RADIUS = 0.32, WEAPON_REST = 0.92;
-    static final double MAX_PITCH = Math.toRadians(35), MAX_WEAPON_YAW = Math.toRadians(50);
-    static final double BLOCK_SPARK_DURATION = 0.22;
-    private static final Color NORMAL_WEAPON_COLOR = new Color(185, 190, 198),
-            ATTACK_READY_COLOR = new Color(248, 205, 76), ACTIVE_ATTACK_COLOR = new Color(255, 224, 42),
-            ATTACK_RECOVERY_COLOR = new Color(198, 126, 35), BLOCK_GLOW_COLOR = new Color(48, 220, 235);
+    static final double
+            BODY_RADIUS = 0.32,
+            WEAPON_REST = 0.92,
+            WEAPON_HEIGHT = 1.15,
+            MAX_PITCH = Math.toRadians(35),
+            MAX_WEAPON_YAW = Math.toRadians(50),
+            BLOCK_SPARK_DURATION = 0.22;
+    private static final Color
+            NORMAL_WEAPON_COLOR = new Color(185, 190, 198),
+            ATTACK_READY_COLOR = new Color(248, 205, 76),
+            ACTIVE_ATTACK_COLOR = new Color(255, 224, 42),
+            ATTACK_RECOVERY_COLOR = new Color(198, 126, 35),
+            BLOCK_GLOW_COLOR = new Color(48, 220, 235);
 
-    private final AgentConfiguration configuration;
     final Team team;
     final Color color;
-    double x, y, previousX, previousY, velocityX, velocityY, movementHeading, angle, pitch, desiredPitch,
-            attackPitch, baseAttackPitch, weaponYaw, desiredWeaponYaw, previousTipX, previousTipY,
-            manipulationPitchOffset, manipulationYawOffset, baitOffset, baitTime;
-    double stateTime, decisionTime, reactionTime, aimError, attackReachScale = 1, engagementTime,
-            feintDuration, feintCooldown, guardPrepareTime, guardHoldTime, guardSwitchCooldown;
+    Pos pos, previous, velocity = new Pos(), desiredVelocity = new Pos(), previousTip, blockSpark;
+    Pos renderOffset = new Pos();
+    boolean hiddenAfterDeath;
+    final DeadAgentAudit deadAgentAudit = new DeadAgentAudit();
+    private DeathPose deathPose;
+    SteeringContributionSnapshot lastGroup3Steering;
+    double
+            movementHeading, angle, angularVelocity, pitch, desiredPitch,
+            attackPitch, baseAttackPitch, weaponYaw, desiredWeaponYaw,
+            manipulationPitchOffset, manipulationYawOffset, baitOffset,
+            stateTime, decisionTime, reactionTime, aimError, attackReachScale = 1, engagementTime,
+            feintDuration, feintCooldown, guardPrepareTime, guardHoldTime, guardSwitchCooldown,
+            pressureReceived, pressureGuardTime, pressureReleaseDelay, pressureTransferDelay,
+            pressureFeintCooldown, pressureEscapeTime, pressureEscapeDelay, pressureReengageTime,
+            localRoleTime, localSwitchCooldown, localHoldTransferTime, tacticalIntentTime,
+            interceptionReevaluationTime, interceptionPhaseTime, threatResponseDelay;
+    private final String name;
+    final AgentStats stats;
+    Tactic tactic;
     CombatState state = CombatState.NEUTRAL;
+    CombatState targetStateAtAttackCommit = CombatState.NEUTRAL;
     Decision decision = Decision.WAIT;
+    final MovementIntent movementIntent = new MovementIntent();
     CombatDirection attackDirection = CombatDirection.UP, queuedAttackDirection = CombatDirection.DOWN,
             lastCommittedAttackDirection;
     BlockDirection blockDirection = BlockDirection.UP;
     EngagementPhase engagementPhase = EngagementPhase.PROBE;
+    OpeningChoice openingChoice = OpeningChoice.UNDECIDED;
     AttackManipulation attackManipulation = AttackManipulation.NEUTRAL;
+    AttackIntent attackIntent = AttackIntent.HOLD;
+    PressureRole pressureRole = PressureRole.NONE;
+    PressureContext pressureContext = PressureContext.NONE;
+    LocalRole localRole = LocalRole.FREE;
+    TacticalIntent tacticalIntent = TacticalIntent.DUEL;
+    GroupIntent groupIntent = GroupIntent.MARK;
+    FlankPhase flankPhase = FlankPhase.APPROACH_SIDE;
+    EngagementSlot engagementSlot;
+    Engagement engagement;
+    Musketeer plannedTarget;
+    Musketeer primaryMark, secondaryThreat, coveredBy, covering;
+    CoverAssessment coverAssessment;
+    CoverPositionAssessment coverPositionAssessment;
+    GroupSteeringDebug groupSteeringDebug;
+    LocalManeuver localManeuver;
+    LocalManeuverAssessment localManeuverAssessment;
+    WeaponThreatLane primaryWeaponLane, secondaryWeaponLane;
+    final MultiThreatAttention multiThreatAttention = new MultiThreatAttention();
+    final AttentionAllocation attentionAllocation = new AttentionAllocation();
+    CommitAssessment commitAssessment;
+    AttackOpportunity attackOpportunity;
+    AttackOpportunityRejection lastAttackOpportunityRejection =
+            AttackOpportunityRejection.NO_IDENTIFIABLE_OPENING;
+    RevengeOpportunity revengeOpportunity;
+    CounterCoverAssessment counterCoverAssessment;
+    Pos tacticalDestination, preferredGroupPosition, rawInterceptionPoint, committedInterceptionPoint,
+            rawRearDestination, smoothedRearDestination;
+    InterceptionPhase interceptionPhase;
+    ThreatAssessment threatAssessment = new ThreatAssessment(0, false, false,
+            Double.POSITIVE_INFINITY, ThreatResponse.IGNORE);
+    BackstabOpportunity backstabOpportunity = BackstabOpportunity.unavailable();
+    ThreatResponse threatResponse = ThreatResponse.IGNORE, pendingThreatResponse = ThreatResponse.IGNORE;
+    Musketeer tacticalThreat;
+    Musketeer group3DefensiveThreat;
+    String lastIntentReason = "unassigned", lastInterceptionReason = "none", lastFlankReason = "not_started";
+    double lastThreatLoggedScore = Double.NaN;
+    double group3DefenseReadyAt;
+    int group3ObservedThreatSequence = -1;
     HitZone intendedZone = HitZone.TORSO, lastHitZone;
     ChamberType chamberType = ChamberType.NONE, chamberMessageType = ChamberType.NONE;
     double attackHeight = HitZone.TORSO.centerHeight();
     int hitPoints = 100, lastDamage;
-    double hitMessageTime, chamberMessageTime, chamberTimingError, baitTrapMessageTime, punishMessageTime,
-            baitAdvanceMessageTime, blockSparkTime, blockSparkX, blockSparkY, backstabMessageTime,
-            doubleBlockSwitchTime, doubleBlockMessageTime;
-    double dezoneTime, dezoneCooldown, dezoneDangerTime, targetLockTime, rearReactionTime, backEscapeTime, freeKillPerceivedDistance;
+    Message
+            doubleBlockMessage = new Message(new Color(145, 91, 181)),
+            hitMessage = new Message(new Color(170, 35, 35)),
+            chamberMessage = new Message(new Color(210, 128, 18)),
+            baitMessage = new Message(new Color(184, 117, 28)),
+            baitTrapMessage = new Message(new Color(190, 45, 45)),
+            punishMessage = new Message(new Color(48, 137, 86)),
+            baitAdvanceMessage = new Message(new Color(37, 111, 180)),
+            dezoneMessage = new Message(new Color(48, 137, 86));
+    int backWarningTimes;
+    double chamberTimingError,
+            blockSparkTime, backstabMessageTime,
+            doubleBlockSwitchTime,
+            dezoneCooldown, dezoneDangerTime, targetLockTime, rearReactionTime, backEscapeTime,
+            backEscapeCooldown, movingIntoLineReasonUntil,
+            freeKillPerceivedDistance, rearAngle, previousRearAngle, rearAngleGainRate,
+            rearStableTime, rearNoProgressTime, flankFixerLostTime, flankRadiusOffset,
+            controlledBackstabReleaseAngle, flankPhaseStartedAt;
     int baitSequence, observedBaitSequence, chamberChain, chamberMessageChain, attackSequence, blockSequence,
             directionStreak, engagementSide = 1, feintCount;
     DezoneMovement dezoneMovement = DezoneMovement.NONE;
     DezoneStance dezoneStance = DezoneStance.NEUTRAL;
     boolean alive = true, threatSeen, attackResolved, simpleChamberLethal, baitedAttack, punishingBait,
-            exploitingBait, backExposed, freeKillAttempt, doubleBlockSwitched, dezoneSwitchCommitted,
-            feintToBlock, guardSwitching;
-    int backEscapeDirection = 1;
+            exploitingBait, backExposed, freeKillAttempt, controlledBackstabAttempt,
+            rearSectorStabilized, backstabWindowLogged, doubleBlockSwitched, dezoneSwitchCommitted,
+            feintToBlock, feintCancel, guardSwitching, pressureMode, pressureCounter, pressureEscapeActive,
+            backEscapeCountedSafe, targetFocusedOnOtherAtAttackCommit, modernStationaryEpisodeActive;
+    int backEscapeDirection = 1, pressureSide = 1, localSide = 1, rotationSide = 1,
+            lastLocalManeuverSide;
     BlockDirection doubleBlockSecondDirection = BlockDirection.DOWN;
-    Musketeer target, rearThreat, doubleBlockThreat, dezoneOriginalTarget, dezoneSwitchTarget;
+    Musketeer target, rearThreat, doubleBlockThreat, dezoneOriginalTarget, dezoneSwitchTarget,
+            pressureSource, pressureFixedTarget, pressureTransferTarget, forcedPressureSource, localObjective,
+            openingOpponent, movingIntoLineTarget;
     final IdentityHashMap<Musketeer, OpponentAwareness> opponentAwareness = new IdentityHashMap<>();
+    final IdentityHashMap<Musketeer, Double> pressureByOpponent = new IdentityHashMap<>();
+    final IdentityHashMap<Musketeer, Double> localThreatByOpponent = new IdentityHashMap<>();
 
-    Musketeer(AgentConfiguration configuration, Team team, Color color, double x, double y, double angle) {
-        this.configuration = configuration;
+    Musketeer(AgentConfiguration configuration, Team team, Color color, Pos pos, double angle) {
         this.team = team;
         this.color = color;
-        this.x = x;
-        this.y = y;
+        this.pos = pos;
         this.angle = angle;
-        previousX = x;
-        previousY = y;
+        name = configuration.name();
+        stats = configuration.stats();
+        tactic = configuration.tactic();
+        previous = pos;
         movementHeading = angle;
-        previousTipX = tipX();
-        previousTipY = tipY();
+        previousTip = tip();
     }
 
-    AgentStats getStats() {
-        return configuration.stats();
+    void assignTacticalIntent(Engagement engagement, TacticalIntent intent, EngagementSlot slot,
+                              Musketeer plannedTarget, String reason) {
+        this.engagement = engagement;
+        tacticalIntent = intent;
+        engagementSlot = slot;
+        this.plannedTarget = plannedTarget;
+        lastIntentReason = reason;
+        tacticalIntentTime = 0;
     }
 
-    Tactic getTactic() {
-        return configuration.tactic();
+    double getX() {
+        return pos.x();
+    }
+
+    double getY() {
+        return pos.y();
     }
 
     double weaponLength() {
@@ -119,26 +213,85 @@ final class Musketeer {
         return attackDirection == CombatDirection.UP ? -0.08 : 0.08;
     }
 
-    double tipX() {
-        return x + Math.cos(weaponWorldAngle()) * weaponLength() - Math.sin(weaponWorldAngle()) * weaponOffset();
-    }
-
-    double tipY() {
-        return y + Math.sin(weaponWorldAngle()) * weaponLength() + Math.cos(weaponWorldAngle()) * weaponOffset();
+    Pos tip() {
+        return pos.plus(new Pos(Math.cos(weaponWorldAngle()) * weaponLength() - Math.sin(weaponWorldAngle()) * weaponOffset(), Math.sin(weaponWorldAngle()) * weaponLength() + Math.cos(weaponWorldAngle()) * weaponOffset()));
     }
 
     double weaponWorldAngle() {
         return Math.atan2(Math.sin(angle + weaponYaw), Math.cos(angle + weaponYaw));
     }
 
-    String name(UiLanguage language) {
-        return language.text(configuration.name(), configuration.name());
+    void captureDeathPose() {
+        if (deathPose == null) deathPose = new DeathPose(pos, angle, weaponWorldAngle());
     }
 
-    void paint(Graphics2D g, double scale, double originX, double originY, UiLanguage language) {
+    DeathPose deathPose() {
+        return deathPose;
+    }
+
+    void freezeAtDeathPose() {
+        if (alive || deathPose == null) return;
+        pos = previous = deathPose.position();
+        angle = deathPose.bodyAngle();
+        weaponYaw = Math.atan2(Math.sin(deathPose.weaponAngle() - angle),
+                Math.cos(deathPose.weaponAngle() - angle));
+        desiredWeaponYaw = weaponYaw;
+        velocity = desiredVelocity = new Pos();
+        angularVelocity = 0;
+        previousTip = tip();
+    }
+
+    void clearActiveIntentOnDeath() {
+        target = plannedTarget = primaryMark = secondaryThreat = coveredBy = covering = null;
+        tacticalThreat = group3DefensiveThreat = rearThreat = doubleBlockThreat = null;
+        dezoneOriginalTarget = dezoneSwitchTarget = pressureSource = pressureFixedTarget = null;
+        pressureTransferTarget = forcedPressureSource = localObjective = openingOpponent = null;
+        movingIntoLineTarget = movementIntent.target = null;
+        engagement = null;
+        localManeuver = null;
+        coverAssessment = null;
+        coverPositionAssessment = null;
+        groupSteeringDebug = null;
+        localManeuverAssessment = null;
+        primaryWeaponLane = secondaryWeaponLane = null;
+        commitAssessment = null;
+        attackOpportunity = null;
+        revengeOpportunity = null;
+        counterCoverAssessment = null;
+        tacticalDestination = preferredGroupPosition = rawInterceptionPoint = null;
+        committedInterceptionPoint = rawRearDestination = smoothedRearDestination = null;
+        backstabOpportunity = BackstabOpportunity.unavailable();
+        threatAssessment = new ThreatAssessment(0, false, false,
+                Double.POSITIVE_INFINITY, ThreatResponse.IGNORE);
+        threatResponse = pendingThreatResponse = ThreatResponse.IGNORE;
+        attentionAllocation.primaryThreat = attentionAllocation.secondaryThreat = null;
+        attentionAllocation.peripheralThreat = attentionAllocation.pendingPrimary = null;
+        attentionAllocation.formerPrimary = null;
+        multiThreatAttention.focusedThreat = multiThreatAttention.secondaryThreat = null;
+        opponentAwareness.clear();
+        pressureByOpponent.clear();
+        localThreatByOpponent.clear();
+        movementIntent.source = decision = Decision.WAIT;
+        movementIntent.state = CombatState.DEAD;
+        pressureMode = pressureCounter = pressureEscapeActive = false;
+        controlledBackstabAttempt = freeKillAttempt = backExposed = false;
+    }
+
+    double pitchFor(double height, double distance) {
+        return Math.clamp(Math.atan2(height - WEAPON_HEIGHT, Math.max(0.25, distance)), -MAX_PITCH, MAX_PITCH);
+    }
+
+    String name(UiLanguage language) {
+        return language.text(name, name);
+    }
+
+    void paint(Graphics2D g, double scale, Pos origin, UiLanguage language) throws IOException {
+        if (!alive && hiddenAfterDeath) return;
+        var visualOrigin = origin.plus(renderOffset.times(scale));
         var transform = g.getTransform();
         var originalStroke = g.getStroke();
-        g.translate(originX + x * scale, originY + y * scale);
+        Pos center = visualOrigin.plus(pos.times(scale));
+        g.translate(center.x(), center.y());
         var centerTransform = g.getTransform();
         paintVelocity(g, scale);
         g.setTransform(centerTransform);
@@ -173,31 +326,25 @@ final class Musketeer {
         g.setColor(new Color(35, 35, 35, 150));
         g.drawLine((int) (-radius * 0.42), (int) (-radius * 0.30), (int) (-radius * 0.42), (int) (radius * 0.30));
         g.setTransform(transform);
-        paintAttackSweep(g, scale, originX, originY);
-        paintDirectionBadge(g, scale, originX + x * scale, originY + y * scale);
-        paintBasicCombatMessage(g, scale, originX + x * scale, originY + y * scale, language);
-        paintDoubleBlockMessage(g, scale, originX + x * scale, originY + y * scale, language);
-        paintHitMessage(g, scale, originX + x * scale, originY + y * scale, language);
-        paintChamberMessage(g, scale, originX + x * scale, originY + y * scale, language);
-        paintBaitMessage(g, scale, originX + x * scale, originY + y * scale, language);
-        paintBaitOutcomeMessage(g, scale, originX + x * scale, originY + y * scale, language);
-        paintDezoneMessage(g, scale, originX + x * scale, originY + y * scale, language);
-        paintBackWarning(g, scale, originX + x * scale, originY + y * scale, language);
-        paintBlockSpark(g, scale, originX, originY);
+        paintAttackSweep(g, scale, visualOrigin);
+        paintDirectionBadge(g, scale, center.x(), center.y());
+        paintCombatMessage(g, scale, center, language);
+        paintBackWarning(g, scale, center.x(), center.y(), language);
+        paintBlockSpark(g, scale, visualOrigin);
         g.setStroke(originalStroke);
     }
 
-    private void paintAttackSweep(Graphics2D g, double scale, double originX, double originY) {
+    private void paintAttackSweep(Graphics2D g, double scale, Pos origin) {
         if (!alive || !isAttacking()) return;
         g.setStroke(new BasicStroke((float) Math.max(1.4, scale * 0.022), BasicStroke.CAP_ROUND,
                 BasicStroke.JOIN_ROUND));
         g.setColor(new Color(255, 202, 44, 92));
-        g.drawLine((int) (originX + previousTipX * scale), (int) (originY + previousTipY * scale),
-                (int) (originX + tipX() * scale), (int) (originY + tipY() * scale));
+        Pos p = origin.plus(previousTip.times(scale)), po = origin.plus(tip().times(scale));
+        g.drawLine((int) p.x(), (int) p.y(), (int) po.x(), (int) po.y());
     }
 
     private void paintVelocity(Graphics2D g, double scale) {
-        var speed = Math.hypot(velocityX, velocityY);
+        var speed = Math.hypot(velocity.x(), velocity.y());
         if (!alive || speed < 0.12) return;
         g.rotate(movementHeading);
         g.setStroke(new BasicStroke((float) Math.max(1.2, scale * 0.018), BasicStroke.CAP_ROUND,
@@ -322,18 +469,63 @@ final class Musketeer {
                 (float) (centerY - BODY_RADIUS * scale - 7));
     }
 
-    private void paintBasicCombatMessage(Graphics2D g, double scale, double centerX, double centerY,
-                                         UiLanguage language) {
-        if (chamberMessageTime > 0 || baitTime > 0 || baitTrapMessageTime > 0 || punishMessageTime > 0 ||
-                baitAdvanceMessageTime > 0 || dezoneTime > 0 || backstabMessageTime > 0 ||
-                doubleBlockMessageTime > 0) return;
+    private void paintCombatMessage(Graphics2D g, double scale, Pos center, UiLanguage language) {
+        if (backstabMessageTime > 0) {
+            var message = language.text("BACKSTAB !", "背刺！");
+            g.setFont(g.getFont().deriveFont(Font.BOLD, 16f));
+            g.setColor(new Color(205, 38, 38));
+            g.drawString(message, (float) (center.x() - g.getFontMetrics().stringWidth(message) / 2.0),
+                    (float) (center.y() - BODY_RADIUS * scale - 30));
+            return;
+        }
+        if (doubleBlockMessage.isActive()) {
+            doubleBlockMessage.paint(g, language.text("DOUBLE BLOCK !", "雙重格擋！"), center, scale);
+            return;
+        }
+        if (hitMessage.isActive() && lastHitZone != null) {
+            hitMessage.paint(g, lastHitZone.label(language) + " -" + lastDamage, center, scale);
+            return;
+        }
+        if (baitTrapMessage.isActive()) {
+            baitTrapMessage.paint(g, language.text("PIÉGÉ !", "中計！"), center, scale);
+            return;
+        }
+        if (punishMessage.isActive()) {
+            punishMessage.paint(g, language.text("PUNITION !", "懲罰！"), center, scale);
+            return;
+        }
+        if (baitAdvanceMessage.isActive()) {
+            baitAdvanceMessage.paint(g, language.text("CONTRE-APPÂT !", "識破前壓！"), center, scale);
+            return;
+        }
+        if (chamberMessage.isActive()) {
+            chamberMessage.paint(g, chamberMessageType == ChamberType.PERFECT ?
+                    language.text("CHAMBER PARFAIT !", "完美接招反擊！") :
+                    language.text(chamberMessageChain > 1 ? "CHAMBER ×" + chamberMessageChain + " !" : "CHAMBER !",
+                            chamberMessageChain > 1 ? "連續接招反擊 ×" + chamberMessageChain + "！" : "接招反擊！"),
+                    center, scale);
+            return;
+        }
+        if (baitMessage.isActive()) {
+            baitMessage.paint(g, language.text("APPÂT ", "誘敵 ") + (baitOffset < 0 ? "←" : "→"), center, scale);
+            return;
+        }
+        if (dezoneMessage.isActive()) {
+            dezoneMessage.paint(g, dezoneSwitchTarget == null ? language.text("DÉZONAGE", "脫離原位") :
+                    language.text("CHANGEMENT CIBLE", "換目標脫離"), center, scale);
+            return;
+        }
         String message;
         Color messageColor;
         if (state == CombatState.FEINT) {
             message = language.text("FEINTE", "變招");
             messageColor = new Color(151, 91, 181);
-        } else if (isBasicAttack() && (state == CombatState.ATTACK_PREPARE || state == CombatState.ATTACK_HOLD)) {
-            message = language.text("PRÊT", "準備");
+        } else if (isBasicAttack() && state == CombatState.ATTACK_PREPARE) {
+            message = attackIntent == AttackIntent.DIRECT_RELEASE ?
+                    language.text("ESTOC DIRECT", "直接刺擊") : language.text("ARMER HOLD", "準備保持");
+            messageColor = ATTACK_READY_COLOR;
+        } else if (isBasicAttack() && state == CombatState.ATTACK_HOLD) {
+            message = language.text("HOLD", "保持攻擊");
             messageColor = ATTACK_READY_COLOR;
         } else if (isBasicAttack() && state == CombatState.ATTACK_ACTIVE) {
             message = language.text("ATTAQUE", "攻擊") + (attackManipulation == AttackManipulation.NEUTRAL ? "" :
@@ -352,26 +544,15 @@ final class Musketeer {
         } else return;
         g.setFont(g.getFont().deriveFont(Font.BOLD, 13f));
         g.setColor(messageColor);
-        g.drawString(message, (float) (centerX - g.getFontMetrics().stringWidth(message) / 2.0),
-                (float) (centerY - BODY_RADIUS * scale - 28));
+        g.drawString(message, (float) (center.x() - g.getFontMetrics().stringWidth(message) / 2.0),
+                (float) (center.y() - BODY_RADIUS * scale - 28));
     }
 
-    private void paintDoubleBlockMessage(Graphics2D g, double scale, double centerX, double centerY,
-                                         UiLanguage language) {
-        if (doubleBlockMessageTime <= 0) return;
-        var message = language.text("DOUBLE BLOCK !", "雙重格擋！");
-        g.setFont(g.getFont().deriveFont(Font.BOLD, 16f));
-        g.setColor(new Color(145, 91, 181));
-        g.drawString(message, (float) (centerX - g.getFontMetrics().stringWidth(message) / 2.0),
-                (float) (centerY - BODY_RADIUS * scale - 30));
-    }
-
-    private void paintBlockSpark(Graphics2D g, double scale, double originX, double originY) {
+    private void paintBlockSpark(Graphics2D g, double scale, Pos origin) {
         if (blockSparkTime <= 0) return;
         var remaining = Math.clamp(blockSparkTime / BLOCK_SPARK_DURATION, 0, 1);
         var progress = 1 - remaining;
-        var centerX = originX + blockSparkX * scale;
-        var centerY = originY + blockSparkY * scale;
+        Pos center = origin.plus(blockSpark.times(scale));
         var radius = 7 + progress * 13;
         g.setStroke(new BasicStroke(2f, BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND));
         g.setColor(new Color(255, 226, 73, (int) (remaining * 230)));
@@ -379,89 +560,32 @@ final class Musketeer {
             var angle = n * Math.PI / 4;
             var inner = radius * 0.28;
             var outer = radius * (n % 2 == 0 ? 1 : 0.72);
-            g.drawLine((int) (centerX + Math.cos(angle) * inner), (int) (centerY + Math.sin(angle) * inner),
-                    (int) (centerX + Math.cos(angle) * outer), (int) (centerY + Math.sin(angle) * outer));
+            Pos p = center.plus(new Pos(angle).times(inner)), po = center.plus(new Pos(angle).times(outer));
+            g.drawLine((int) p.x(), (int) p.y(), (int) po.x(), (int) po.y());
         }
         g.setColor(new Color(255, 250, 210, (int) (remaining * 245)));
-        g.fillOval((int) centerX - 3, (int) centerY - 3, 6, 6);
-    }
-
-    private void paintHitMessage(Graphics2D g, double scale, double centerX, double centerY, UiLanguage language) {
-        if (hitMessageTime <= 0 || lastHitZone == null) return;
-        var message = lastHitZone.label(language) + " -" + lastDamage;
-        g.setFont(g.getFont().deriveFont(Font.BOLD, 14f));
-        g.setColor(new Color(170, 35, 35));
-        g.drawString(message, (float) (centerX - g.getFontMetrics().stringWidth(message) / 2.0),
-                (float) (centerY + BODY_RADIUS * scale + 22));
-    }
-
-    private void paintChamberMessage(Graphics2D g, double scale, double centerX, double centerY, UiLanguage language) {
-        if (chamberMessageTime <= 0 || backstabMessageTime > 0 || doubleBlockMessageTime > 0) return;
-        var message = chamberMessageType == ChamberType.PERFECT ?
-                language.text("CHAMBER PARFAIT !", "完美接招反擊！") :
-                language.text(chamberMessageChain > 1 ? "CHAMBER ×" + chamberMessageChain + " !" : "CHAMBER !",
-                        chamberMessageChain > 1 ? "連續接招反擊 ×" + chamberMessageChain + "！" : "接招反擊！");
-        g.setFont(g.getFont().deriveFont(Font.BOLD, 16f));
-        g.setColor(chamberMessageType == ChamberType.PERFECT ?
-                new Color(210, 128, 18) : new Color(126, 55, 171));
-        g.drawString(message, (float) (centerX - g.getFontMetrics().stringWidth(message) / 2.0),
-                (float) (centerY - BODY_RADIUS * scale - 30));
-    }
-
-    private void paintBaitMessage(Graphics2D g, double scale, double centerX, double centerY, UiLanguage language) {
-        if (baitTime <= 0 || chamberMessageTime > 0 || baitTrapMessageTime > 0 || punishMessageTime > 0 ||
-                baitAdvanceMessageTime > 0 || backstabMessageTime > 0 || doubleBlockMessageTime > 0) return;
-        var arrow = baitOffset < 0 ? "←" : "→";
-        var message = language.text("APPÂT ", "誘敵 ") + arrow;
-        g.setFont(g.getFont().deriveFont(Font.BOLD, 14f));
-        g.setColor(new Color(184, 117, 28));
-        g.drawString(message, (float) (centerX - g.getFontMetrics().stringWidth(message) / 2.0),
-                (float) (centerY - BODY_RADIUS * scale - 30));
-    }
-
-    private void paintBaitOutcomeMessage(Graphics2D g, double scale, double centerX, double centerY,
-                                         UiLanguage language) {
-        if (backstabMessageTime > 0 || doubleBlockMessageTime > 0 ||
-                baitTrapMessageTime <= 0 && punishMessageTime <= 0 && baitAdvanceMessageTime <= 0) return;
-        String message;
-        Color messageColor;
-        if (baitTrapMessageTime > 0) {
-            message = language.text("PIÉGÉ !", "中計！");
-            messageColor = new Color(190, 45, 45);
-        } else if (punishMessageTime > 0) {
-            message = language.text("PUNITION !", "懲罰！");
-            messageColor = new Color(48, 137, 86);
-        } else {
-            message = language.text("CONTRE-APPÂT !", "識破前壓！");
-            messageColor = new Color(37, 111, 180);
-        }
-        g.setFont(g.getFont().deriveFont(Font.BOLD, 16f));
-        g.setColor(messageColor);
-        g.drawString(message, (float) (centerX - g.getFontMetrics().stringWidth(message) / 2.0),
-                (float) (centerY - BODY_RADIUS * scale - 30));
-    }
-
-    private void paintDezoneMessage(Graphics2D g, double scale, double centerX, double centerY, UiLanguage language) {
-        if (dezoneTime <= 0 || chamberMessageTime > 0 || baitTime > 0 ||
-                baitTrapMessageTime > 0 || punishMessageTime > 0 || baitAdvanceMessageTime > 0 ||
-                backstabMessageTime > 0 || doubleBlockMessageTime > 0) return;
-        var message = dezoneSwitchTarget == null ? language.text("DÉZONAGE", "脫離原位") :
-                language.text("CHANGEMENT CIBLE", "換目標脫離");
-        g.setFont(g.getFont().deriveFont(Font.BOLD, 14f));
-        g.setColor(new Color(48, 137, 86));
-        g.drawString(message, (float) (centerX - g.getFontMetrics().stringWidth(message) / 2.0),
-                (float) (centerY - BODY_RADIUS * scale - 30));
+        g.fillOval((int) center.x() - 3, (int) center.y() - 3, 6, 6);
     }
 
     private void paintBackWarning(Graphics2D g, double scale, double centerX, double centerY, UiLanguage language) {
-        String message;
-        if (backstabMessageTime > 0) message = language.text("BACKSTAB !", "背刺！");
-        else if (backExposed && hitMessageTime <= 0) message = language.text("DOS EXPOSÉ", "背部暴露");
-        else return;
-        g.setFont(g.getFont().deriveFont(Font.BOLD, backstabMessageTime > 0 ? 16f : 12f));
+        if (!backExposed || hitMessage.isActive() || backstabMessageTime > 0) return;
+        var message = language.text("DOS EXPOSÉ", "背部暴露");
+        g.setFont(g.getFont().deriveFont(Font.BOLD, 12f));
         g.setColor(new Color(205, 38, 38));
-        var messageY = backstabMessageTime > 0 ? centerY - BODY_RADIUS * scale - 30 :
-                centerY + BODY_RADIUS * scale + 19;
+        var messageY = centerY + BODY_RADIUS * scale + 19;
         g.drawString(message, (float) (centerX - g.getFontMetrics().stringWidth(message) / 2.0), (float) messageY);
+    }
+
+    void recordMessage() {
+        System.out.println(name + ":\n"
+                + "doubleBlock: " + doubleBlockMessage.times + '\n'
+                + "hit: " + hitMessage.times + '\n'
+                + "chamber: " + chamberMessage.times + '\n'
+                + "bait: " + baitMessage.times + '\n'
+                + "baitTrap: " + baitTrapMessage.times + '\n'
+                + "punish: " + punishMessage.times + '\n'
+                + "baitAdvance: " + baitAdvanceMessage.times + '\n'
+                + "dezone: " + dezoneMessage.times + '\n'
+                + "backWarning: " + backWarningTimes);
     }
 }

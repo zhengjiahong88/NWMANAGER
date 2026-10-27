@@ -1,0 +1,8 @@
+enum SupportPlanState {
+    PREPARING_TO_LEAVE,
+    MOVING_TO_SUPPORT,
+    TWO_VS_ONE_ACTIVE,
+    INTERCEPTED,
+    ABORTED,
+    COMPLETED
+}

@@ -1,0 +1,10 @@
+enum GroupIntent {
+    MARK,
+    COVER,
+    WAIT,
+    COMMIT_ATTACK,
+    READY_TO_REVENGE,
+    COMMIT_REVENGE,
+    COUNTER_COVER,
+    RECOVER_FORMATION
+}

@@ -1,1098 +1,1788 @@
 # NWMANAGER
 
-[中文說明](README.md)
-
-NWMANAGER est un prototype observable de combat 2v2 à la baïonnette en vue de dessus. Deux Agents bleus affrontent deux Agents rouges. Chacun se déplace, choisit ou change de cible, réagit aux menaces immédiates, évite son coéquipier, prépare ses attaques, frappe, pare, subit des blessures et se replie. Le résultat n'est pas déterminé directement par un tirage fondé sur les statistiques : il dépend de la position réelle, de l'orientation, de la pointe de la baïonnette, de la direction d'attaque et de parade, du temps de réaction, de la zone touchée et des dégâts.
-
-## Fonctionnalités actuelles
-
-- Menu principal bilingue, écran Jouer et sélection du Match amical 2v2
-- Création des deux équipes avec nom, tactique et onze statistiques modifiables pour chacun des quatre joueurs
-- Validation des statistiques de 1 à 100 et lancement du combat dans la même fenêtre
-- Déplacement libre en 2D avec inertie, trajectoires obliques, passages latéraux et sortie progressive des échanges
-- IA défensive privilégiant la survie et la contre-attaque
-- Préparation, maintien, phase active et récupération d'une attaque
-- Cycle tactique `PROBE → COMMIT → PASS_THROUGH → DISENGAGE → RESET`
-- Feinte vers une autre attaque ou vers une parade, parade préparée/maintenue, changement de garde et riposte
-- Accel et drag intentionnels par manipulation continue du pitch et du yaw pendant l'estoc
-- Attaques hautes et basses ; parades hautes, basses ou latérales
-- Collision balayée entre l'ancienne et la nouvelle position de la pointe, plus collision corporelle souple
-- Sélection et changement de cible, réaction prioritaire à une attaque latérale, soutien simple et évitement du coéquipier
-- Victoire uniquement lorsque les deux membres d'une équipe sont éliminés ; match nul possible si les deux équipes tombent au même pas physique
-- 100 points de vie, zones tête／torse／jambes et dégâts cumulés
-- Erreurs d'exécution liées aux statistiques : mauvaise parade, coup à côté, erreur de distance ou mauvais choix
-- Flèches de combat, texte de dégâts et poses de parade distinctes
-- Panneaux affichant les statistiques, les PV, l'état, la décision, la direction, la distance, la cible et la dernière blessure
-- Quatre fiches latérales, lignes pointillées rondes vers la cible actuelle et ligne carrée vers une cible de dézonage planifiée
-- Pause, redémarrage et vitesses de simulation 0,25×, 0,5×, 1×, 2× et 4×
-- Interface française par défaut et bouton permettant de basculer instantanément entre le français et le chinois
-- Recul ralenti, orientations horizontale/verticale et étourdissement sur parade
-- Angle latéral de baïonnette indépendant du corps et appât pouvant provoquer un estoc trop court ou une avance maîtrisée de contre-appât
-- Statistique « Sortir de sa zone » et dézonage prolongé en parade, en maintien ou en posture neutre
-- Dézonage de cible : rupture visible du vis-à-vis, traversée oblique, changement de cible puis stab du deuxième ennemi
-- Dixième statistique « Chamber » de 1 à 100, chamber simple blocable et re-chamberable, plus chamber parfait extrêmement rare au-dessus de 90
-- Onzième statistique « Double Block » de 1 à 100 : changement très difficile de parade haute/basse contre deux estocs rapprochés en 2v1
-- Backstab géométrique impossible à parer ou à chamber, alerte de dos exposé et protection du dos dérivée des aptitudes existantes
-- Perception périphérique imparfaite : le deuxième adversaire latéral devient plus difficile à voir avec la distance, puis sa dernière position n'est mémorisée que temporairement
-
-## Déplacement et angles du personnage
-
-Le moteur conserve maintenant une vélocité `velocityX/Y` au lieu d'ajouter directement chaque décision à la position. La vitesse de base dépend du jeu de jambes :
-
-```text
-vitesse de base = 1,05 + 0,006 × jeu de jambes
-```
-
-Les coefficients d'état sont :
-
-```text
-estoc actif : × 0,86
-récupération : × 0,92
-feinte : × 0,84
-parade préparée ou maintenue : × 0,78
-composante arrière : × 0,62 supplémentaire
-```
-
-L'accélération avec laquelle la vélocité rejoint le vecteur désiré vaut :
-
-```text
-A = 4,6 + 0,045 × jeu de jambes
-A pendant l'estoc = A × 0,72
-A pendant la récupération = A × 0,64
-```
-
-La variation de vélocité est limitée à `A × dt`. Sans entrée, une friction de `3,2 + 0,018 × jeu de jambes` par seconde ramène progressivement la vitesse à zéro. Un Agent ne peut donc plus inverser instantanément sa trajectoire. `movementHeading = atan2(velocityY, velocityX)` mémorise la vraie direction de course.
-
-Chaque Agent possède quatre orientations ou directions distinctes :
-
-- `movementHeading` : trajectoire réelle produite par l'inertie ;
-- `angle` : orientation horizontale du corps ;
-- `weaponYaw` : décalage gauche/droite de la baïonnette, limité à `±50°` ;
-- `pitch`／`attackPitch` : inclinaison verticale, limitée à `±35°`.
-
-Une inclinaison négative vise le sol et une inclinaison positive le ciel. L'arme se trouve à une hauteur de référence de `1,15 m`. L'IA calcule son inclinaison désirée à partir de la hauteur du coup et de la distance horizontale :
-
-```text
-pitch désiré = atan2(hauteur du coup - 1,15, distance horizontale)
-```
-
-La rotation du corps conserve `62 %` de sa vitesse pendant l'estoc, `68 %` en garde et `52 %` pendant la récupération. La baïonnette conserve respectivement `55 %` et `44 %` pendant l'estoc et la récupération. Pendant `PASS_THROUGH` et `DISENGAGE`, la course continue selon `movementHeading` tandis que le corps revient progressivement vers l'ennemi : les combattants peuvent donc se croiser sans marcher artificiellement à reculons.
-
-## Perception périphérique du deuxième adversaire
-
-L'IA ne connaît plus parfaitement les deux ennemis sur 360°. Chaque `Musketeer` possède une `IdentityHashMap<Musketeer, OpponentAwareness>` ; pour chaque adversaire, elle conserve `visible`, `lastKnownX/Y` et `memoryTime`. La perception est réévaluée toutes les :
-
-```text
-0,25 + U(0 ; 0,08) seconde
-```
-
-L'aptitude dérivée utilisée par cette lecture est :
-
-```text
-V = round(0,45 × réaction + 0,35 × décision + 0,20 × contrôle de distance)
-```
-
-Elle ne donne aucun bonus direct à la collision ou aux dégâts. La réaction aide à remarquer un mouvement, la décision répartit l'attention entre deux menaces et le contrôle de distance aide à situer une silhouette éloignée.
-
-### Angle, distance et attention
-
-Avec `α`, l'écart absolu entre l'orientation corporelle et la direction de l'adversaire, le coefficient angulaire continu vaut :
-
-```text
-0° ≤ α ≤ 60°    : A = 1,00 - 0,15 × α / 60
-60° < α ≤ 115°  : A = 0,85 - 0,55 × (α - 60) / 55
-115° < α ≤ 180° : A = 0,30 - 0,24 × (α - 115) / 65
-```
-
-Il passe donc de `1,00` droit devant à `0,30` à la limite du dos, puis `0,06` directement derrière. La distance et le niveau produisent :
-
-```text
-D = clamp(1 - max(0, distance - 1,5) / 4, 0,12, 1)
-S = 0,45 + 0,0055 × V
-```
-
-Pour le deuxième adversaire, l'attention vaut `0,45` si la cible directe est à moins de `2,1 m` ou attaque déjà, sinon `0,72`. La cible actuellement suivie n'a pas cette pénalité. La base est :
-
-```text
-Pbase = A × D × S × attention
-```
-
-Être déjà visible ajoute `0,18`; attaquer ajoute `0,28`; se déplacer sans attaquer ajoute `0,06`. Un ennemi situé à moins de `1,6 m` et hors du dos conserve au moins `82 %`, tandis que la cible directe hors du dos conserve au moins `96 %`. Le résultat final est borné entre `2 % et 99 %`.
-
-Un deuxième adversaire latéral à `1,5 m` reste donc généralement évident. À `4 m`, si l'Agent est occupé par un duel direct proche, plusieurs contrôles de perception peuvent échouer. Une attaque latérale augmente la visibilité grâce au mouvement, sans devenir une alerte omnisciente.
-
-### Dernière position connue
-
-Lors d'une détection, la dernière position est mémorisée avec :
-
-```text
-erreur de position σ = 0,01 + (100 - contrôle de distance) × 0,003 + (1 - A) × 0,08 m
-durée de mémoire = 0,55 + (réaction + décision) / 200 × 1,30 seconde
-```
-
-Tant que `visible = true`, l'Agent utilise la position présente. Après la perte visuelle, `knownX()` et `knownY()` ne donnent que cette position légèrement fausse. L'Agent peut encore s'orienter vers son souvenir, mais ne lit plus l'attaque, la récupération, l'appât ou le dézonage actuels de cet ennemi. À l'expiration de `memoryTime`, il disparaît du choix de cible jusqu'à une nouvelle détection.
-
-## Backstab et protection du dos
-
-### Secteur arrière et résolution du coup
-
-Le backstab ne remplace ni la collision ni la hauteur. La pointe doit d'abord entrer réellement dans le cercle du défenseur pendant la phase active, puis `HitZone.atHeight()` doit produire une tête, un torse ou des jambes valides. `DuelSimulation.checkHit()` mesure ensuite la position de l'attaquant par rapport à l'orientation corporelle du défenseur :
-
-```text
-θattaquant = atan2(attaquant.y - défenseur.y, attaquant.x - défenseur.x)
-β = abs(normalizeAngle(θattaquant - défenseur.angle))
-β ≥ 115° → backstab
-```
-
-Le calcul utilise `defender.angle`, l'orientation du corps, et non `weaponWorldAngle()`. Orienter la baïonnette à gauche ou à droite ne protège donc pas magiquement le dos. Lorsqu'un contact valide est un backstab, `checkHit()` saute entièrement les deux branches suivantes :
-
-1. interception en `CHAMBER_PREPARE` ;
-2. parade en `BLOCKING`, même si sa hauteur correspond et si l'arme serait dans les 75° normalement autorisés.
-
-Le texte `BACKSTAB !` apparaît pendant `1,15 s`, puis les dégâts ordinaires de la zone sont appliqués : tête 100, torse 100 dans 95 % des cas sinon 50, jambes 40. Le système garantit donc qu'une défense dirigée vers l'avant ne bloque pas un coup arrière ; il ne transforme pas une pointe hors du corps, une hauteur ratée ou un coup dans les jambes en élimination artificielle.
-
-### Opportunité de `FREEKILL`, mais exécution faillible
-
-`findFreeKillTarget()` recherche un adversaire visible qui expose son dos. Le mot freekill désigne ici une excellente occasion tactique, pas une suppression automatique. Les cinq conditions sont :
-
-1. la cible est actuellement `visible` ;
-2. `isRearAttack(candidate, self)` confirme que l'Agent se trouve à au moins 115° derrière elle ;
-3. la cible est à moins de 100° de l'axe actuel de la baïonnette ;
-4. sa distance estimée ne dépasse pas `UP.thrustLength + BODY_RADIUS + 0,10` ;
-5. l'adversaire direct est estimé assez loin pour ne pas punir l'engagement.
-
-Les distances de la cible arrière et de l'adversaire direct sont lues avec :
-
-```text
-distance estimée = distance réelle ou mémorisée
-                 + N(0 ; (100 - contrôle de distance) × 0,006)
-```
-
-La zone dangereuse de l'adversaire direct vaut :
-
-```text
-projectedThrustLength + BODY_RADIUS + 0,55 m
-+ 0,35 m si l'Agent le voit attaquer
-- 0,30 m si l'Agent le voit en récupération ou BLOCK_STUN
-```
-
-L'occasion n'est jugée sûre que si sa distance estimée dépasse ce seuil. Un mauvais contrôle de distance peut donc faire croire que le dos est à portée alors qu'il ne l'est pas, ou que l'adversaire direct est inoffensif alors qu'il peut encore frapper.
-
-La fréquence d'utilisation par décision est :
-
-```text
-F = (0,45 × décision + 0,35 × contrôle de distance + 0,20 × agressivité) / 100
-P(utiliser) = min(0,24 ; (0,01 + 0,14 × F²) × multiplicateur tactique)
-
-Défensive : ×0,75 ; Neutre : ×1,00 ; Agressive : ×1,25
-```
-
-Lorsqu'il s'engage, l'Agent choisit l'attaque haute au-delà de `1,42 m` perçu et l'attaque basse sinon. `configureFreeKillAim()` vise volontairement le torse, mais conserve toute l'erreur horizontale et verticale de la précision. Après la préparation, `FREE_KILL_BACKSTAB` libère immédiatement l'estoc sans avancer pour corriger une mauvaise estimation.
-
-Les conséquences restent physiques :
-
-- pointe hors du cercle ou hauteur hors du corps : raté complet ;
-- hauteur dans les jambes : 40 dégâts seulement ;
-- contact réellement arrière à la tête ou au torse : 100 dégâts ;
-- cible qui se retourne avant l'impact : le bonus de freekill disparaît et les règles ordinaires reviennent ;
-- adversaire direct mal évalué : il peut frapper l'Agent pendant sa préparation ou sa récupération.
-
-Un excellent Agent transforme ainsi une vraie ouverture, à bonne distance et sans menace directe proche, en élimination fiable. Un Agent faible peut frapper à côté, trop court, dans les jambes ou se faire punir.
-
-### Aptitude dérivée
-
-La protection du dos reste une valeur dérivée et n'est pas la statistique « Double Block » ajoutée en onzième position. `AgentStats.backProtection()` la calcule à partir des quatre aptitudes qui correspondent réellement à l'action :
-
-```text
-B = round(0,50 × jeu de jambes
-        + 0,22 × réaction
-        + 0,18 × prise de décision
-        + 0,10 × sortir de sa zone)
-```
-
-Le jeu de jambes reste le facteur principal, comme demandé : il contrôle déjà la vitesse de translation et de rotation. La réaction réduit le temps avant la réponse, la décision améliore le choix du côté et le dézonage prolonge la sortie de l'axe d'encerclement. La fiche affiche `Dos : B` ; ce nombre n'est ni une réduction de dégâts ni une probabilité de bloquer un backstab.
-
-### Détection, réaction et décision
-
-`backExposed` continue de représenter la géométrie réelle afin que le spectateur voie l'arc rouge, mais l'IA n'utilise pas ce drapeau omniscient. `updateBackAwareness()` ne choisit `rearThreat` que parmi les adversaires visibles ou encore mémorisés, avec leur position connue. Une nouvelle menace reconnue démarre un délai réaliste :
-
-```text
-délai arrière = 0,10 + (100 - réaction) × 0,0032 + U(0 ; 0,06) seconde
-```
-
-Une réaction de 100 produit `0,10–0,16 s`; une réaction de 1 produit environ `0,417–0,477 s`. Si l'ennemi arrière attaque déjà, vise l'Agent dans un cône de 34° et se trouve dans sa portée projetée augmentée de la marge corporelle, la sortie devient prioritaire dès la fin de ce délai. Si l'ennemi se trouve seulement derrière, à moins de `3,5 m`, chaque décision admissible peut anticiper :
-
-```text
-P(commencer la protection du dos | conditions) = B / 650
-```
-
-Cette probabilité règle la fréquence d'utilisation de la manœuvre, jamais la validité physique d'un backstab.
-
-### Sortie oblique et protection contre l'encerclement
-
-`beginBackEscape()` annule le dézonage courant et choisit une avancée oblique gauche ou droite. Il n'utilise pas le recul ralenti :
-
-```text
-durée = 0,40 + 0,0035 × jeu de jambes + 0,0015 × sortir de sa zone
-forward = 0,55 ; sideways = ±0,85
-norme du vecteur ≈ 1,012 × vitesse de base
-```
-
-`backEscapeScore()` projette les deux positions possibles pendant `0,80 s`. Le score ne considère que les ennemis suivis par la vue ou la mémoire ; un adversaire entièrement perdu ne fournit donc aucune information magique. Il favorise l'espace restant jusqu'au bord, la distance minimale connue et surtout un angle plus petit entre les deux ennemis vus depuis la position candidate : réduire cet angle signifie sortir latéralement de la ligne avant/arrière. La probabilité de retenir le meilleur côté vaut :
-
-```text
-P(côté le plus sûr) = 0,30 + 0,0065 × B
-```
-
-Elle atteint 95 % pour `B = 100`, mais un Agent faible peut encore choisir le mauvais côté. S'il ne reste qu'un seul ennemi derrière lui, l'Agent peut se tourner progressivement vers lui. S'il existe à la fois un ennemi frontal et un ennemi arrière, `backProtectionFacing()` oriente le corps vers la bissectrice de leurs directions ; lorsqu'ils sont presque exactement opposés à plus de 170°, il choisit la perpendiculaire correspondant au côté de sortie. La baïonnette continue de viser la cible frontale, de sorte qu'une parade avant peut rester active pendant le déplacement oblique.
-
-`selectTarget()` participe à cette sécurité : tant qu'un ennemi frontal reste suivi, les candidats arrière ne remplacent pas la cible et la cible actuelle reste verrouillée pendant la sortie. L'Agent n'effectue donc pas un demi-tour qui exposerait simplement son dos à l'autre adversaire. Le demi-tour normal ne redevient autorisé que lorsqu'il n'existe plus de menace frontale connue.
-
-## Dézonage et statistique « Sortir de sa zone »
-
-Chaque Agent possède désormais une neuvième statistique, `Sortir de sa zone`. Elle représente sa volonté de quitter un face-à-face statique, d'emmener l'échange vers une autre partie de la carte et sa capacité à préférer une avancée oblique efficace à un simple recul qui se fait rattraper. Le dézonage n'est pas une téléportation : c'est une intention persistante, visible pendant laquelle l'Agent continue réellement à se déplacer.
-
-Le dézonage possède maintenant deux variantes : le déplacement spatial décrit en premier, et la rupture de vis-à-vis vers une autre cible. Le dézonage spatial ne peut commencer que si l'adversaire est neutre, si la distance perçue est comprise entre `1,30 et 2,80 m`, si l'Agent ne se trouve pas près d'une limite et si `dezoneCooldown` est terminé. L'IA réévalue sa décision environ toutes les `0,10 à 0,135 seconde`. Pour une évaluation admissible :
-
-```text
-Z = Sortir de sa zone, J = Jeu de jambes, D = Prise de décision
-seuil de dézonage = floor((Z + J + D) / 3)
-P(commencer | conditions remplies) = seuil de dézonage / 1000
-durée = 0,55 + 0,005 × Z + U(0 ; 0,45) seconde
-cooldown initial = durée + U(0,80 ; 1,30) seconde
-```
-
-Le cooldown diminue déjà pendant la manœuvre. Après sa fin, il reste donc entre `0,80 et 1,30 s` avant qu'un nouveau dézonage puisse commencer. Cela empêche plusieurs sorties successives de repousser progressivement les combattants à plusieurs mètres.
-
-Une valeur élevée augmente donc la fréquence et la durée du mouvement. Une fois le dézonage déclenché, le mode est tiré ainsi :
-
-```text
-P(recul pur | distance ≤ 2,20 m) = 0,45 - 0,0035 × Z
-P(avance oblique | pas de recul) = 0,45 + 0,004 × Z
-P(orbite | pas de recul) = 1 - P(avance oblique | pas de recul)
-P(gauche) = P(droite) = 0,5
-```
-
-- Recul pur : disponible uniquement au début à `2,20 m` ou moins. L'Agent s'éloigne avec le facteur de vitesse `0,62`, mais dès que la distance atteint `2,55 m`, `moveAndTurn()` transforme ce recul en avance oblique gauche ou droite. Le dézonage ne peut donc plus créer seul une séparation de quatre mètres.
-- Avance oblique gauche/droite : `0,70` vers l'avant et `0,70` sur le côté, soit environ `0,99 × vitesse de base`. L'Agent avance tout en changeant le côté de l'échange.
-- Orbite gauche/droite : déplacement latéral à pleine vitesse afin de modifier l'angle autour de l'adversaire sans volontairement réduire la distance.
-
-Plus Z est haut, moins l'Agent choisit le recul pur et plus il privilégie l'avance oblique parmi les options restantes. Une posture est également choisie pour toute la manœuvre. Avec `B = timing défensif`, `O = timing offensif` et `T = 100 + B + O` :
-
-```text
-P(posture neutre) = 100 / T
-P(rester en parade) = B / T
-P(rester en maintien) = O / T
-```
-
-En parade, le blocage reste actif jusqu'à la fin du dézonage. En maintien, l'Agent termine sa préparation puis reste en `ATTACK_HOLD` : la limite de maintien ordinaire ne libère pas automatiquement l'estoc au milieu du déplacement. Les règles normales de fin de parade ou de libération reprennent ensuite. Si l'Agent arrive près du bord, il interrompt la manœuvre et revient vers le centre.
-
-L'adversaire peut suivre. Il doit être libre de décider, se trouver à plus de `1,45 m`, et le dézoneur ne doit pas être en maintien d'attaque. Pour chaque décision admissible :
-
-```text
-P(suivre) = (agressivité du poursuivant + décision du poursuivant) / 200
-```
-
-Avec les valeurs actuelles, l'Agent bleu possède Z = `74` : seuil `76/1000`, durée `0,92–1,37 s` et recul pur `19,1 %`. L'Agent rouge possède Z = `56` : seuil `58/1000`, durée `0,83–1,28 s` et recul pur `25,4 %`. Le bleu sort donc plus souvent de sa position et choisit plus fréquemment une coupe oblique vers l'avant.
-
-### Dézonage de cible : quitter son vis-à-vis
-
-Cette variante ne remplace pas le déplacement spatial. Elle permet à un Agent neutre de rompre son duel actuel pour stab l'autre adversaire, notamment celui déjà engagé par son coéquipier. `findTargetSwitchDezoneTarget()` exige un second ennemi actuellement visible, situé entre `0,90 et 3,20 m`. Ce candidat doit soit combattre le coéquipier, soit être en `RECOVERY`／`BLOCK_STUN`, soit montrer réellement son dos à l'Agent.
-
-L'Agent évalue aussi la sécurité laissée par son vis-à-vis. Le contrôle de distance produit toujours une estimation imparfaite. Si l'ancien adversaire paraît encore capable de menacer immédiatement, une bonne prise de décision refuse le transfert ; une mauvaise décision peut accepter cette lecture dangereuse et offrir son dos.
-
-L'aptitude dérivée de rupture de cible vaut :
-
-```text
-S = round(0,35 × sortir de sa zone
-        + 0,25 × prise de décision
-        + 0,20 × jeu de jambes
-        + 0,10 × réaction
-        + 0,10 × agressivité)
-```
-
-Pour chaque décision où un candidat admissible existe :
-
-```text
-P(commencer le transfert) = min(0,11 ; (0,012 + 0,065 × (S / 100)²) × tactique)
-
-tactique Défensive = 0,65
-tactique Neutre    = 1,00
-tactique Agressive = 1,35
-```
-
-Une fois choisie, la traversée reste visible avant tout changement de cible :
-
-```text
-durée avant engagement = 0,72 - 0,0025 × S + U(0 ; 0,20) seconde
-TARGET_SWITCH_LEFT  : forward = 0,55 ; sideways = -0,85
-TARGET_SWITCH_RIGHT : forward = 0,55 ; sideways = +0,85
-```
-
-La direction correcte vers le nouvel ennemi est choisie avec `0,30 + 0,0068 × S`; un Agent faible peut partir du mauvais côté. Pendant cette première phase, `target` reste l'ancien vis-à-vis et la ligne de cible habituelle continue de le montrer. Une seconde ligne plus opaque terminée par un carré indique seulement la cible planifiée. Le texte `CHANGEMENT CIBLE`／`換目標脫離` et les décisions gauche/droite rendent l'intention observable.
-
-La posture utilise les mêmes poids que le dézonage spatial : neutre, parade ou `ATTACK_HOLD`. L'Agent peut donc traverser en couvrant une direction ou en gardant un estoc préparé. À la fin du déplacement seulement, `commitTargetSwitchDezone()` :
-
-1. vérifie que la nouvelle cible est encore vivante et visible ;
-2. remplace réellement `target` et applique un verrouillage de `1,10 s` ;
-3. transforme la parade en préparation d'attaque, ou réoriente l'estoc déjà maintenu ;
-4. avance vers la nouvelle cible avec `DEZONE_SWITCH_ATTACK` ;
-5. choisit, si le coéquipier attaque déjà cette cible et si la décision réussit, la hauteur opposée afin de créer une vraie menace haute + basse et une occasion de Double Block.
-
-L'ancien vis-à-vis reste enregistré dans `dezoneOriginalTarget`. Tant qu'il reste visible et que le stab n'est pas parti, `updateTargetSwitchDezone()` abandonne la rupture si cet adversaire :
-
-- lance une attaque orientée à moins de `34°` et entre dans sa portée projetée augmentée de `0,52 m` ; ou
-- poursuit l'Agent, le cible encore et revient à moins de `1,42 m`.
-
-L'abandon n'est pas instantané :
-
-```text
-délai d'abandon = 0,07 + (100 - réaction) × 0,0028 seconde
-```
-
-Après ce délai, l'Agent revient vers l'ancien adversaire. Il pare si une attaque frontale arrive, protège son dos si cet adversaire est désormais derrière, ou affiche l'abandon du changement de cible et recule. Si le délai est trop long, l'ancien vis-à-vis peut réellement le stab avant l'annulation. Une fois le nouvel estoc en phase active, il est trop tard pour annuler : montrer son dos devient alors une conséquence physique du choix tactique.
-
-## Cycle d'engagement, feintes et manipulation de l'estoc
-
-Le duel local n'est plus un simple choix « avancer ou reculer ». Chaque Agent conserve une `EngagementPhase` persistante qui organise son mouvement sur plusieurs décisions :
-
-```text
-PROBE → COMMIT → PASS_THROUGH → DISENGAGE → RESET → PROBE
-```
-
-- `PROBE` dure `0,45–1,20 s` : l'Agent teste l'angle avec `forward = 0,28` et `sideways = ±0,74`, ou prépare une garde anticipée.
-- `COMMIT` dure `0,65–1,20 s` : il entre obliquement avec `forward = 0,88` et `sideways = ±0,52`, anticipe brièvement la vélocité adverse et cherche l'estoc.
-- `PASS_THROUGH` dure `0,26–0,51 s` : il traverse avec `forward = 1` et `sideways = ±0,58` au lieu de s'arrêter face à face après le contact.
-- `DISENGAGE` dure `0,42–0,80 s` : il conserve sa direction de course avec `forward = 0,94`, tourne progressivement le corps vers la menace et sort aussi dès que la distance atteint `2,20 m`.
-- `RESET` dure `0,30–0,78 s` : un petit recul `-0,18` combiné à un pas latéral `±0,72` replace la garde avant la prochaine sonde.
-
-Le côté gauche ou droit compare l'espace libre jusqu'aux limites. Sa bonne exécution dépend de :
-
-```text
-E = round(0,35 × jeu de jambes
-        + 0,25 × contrôle de distance
-        + 0,25 × décision
-        + 0,15 × agressivité)
-
-P(COMMIT à la fin d'une sonde)
-= clamp(0,18 + 0,005 × E + tactique, 0,12, 0,86)
-
-tactique agressive : +0,18 ; défensive : -0,12 ; neutre : 0
-```
-
-Les phases imposent un plan spatial, mais les urgences de survie, le backstab, le Double Block et les autres mécanismes prioritaires peuvent toujours l'interrompre.
-
-### Mémoire des directions et feinte
-
-`OpponentAwareness` mémorise séparément les nombres d'attaques hautes/basses et de gardes hautes/basses réellement observées. L'attaquant pénalise la répétition de sa dernière direction et tient compte de la garde présente ou habituelle de l'ennemi. Le choix haut/bas reste bruité par la décision : la distance contribue au score, mais ne fixe plus automatiquement la direction.
-
-En `ATTACK_HOLD`, un Agent qui lit une garde adaptée ou remarque qu'il répète trop souvent le même côté peut passer par :
-
-```text
-ATTACK_HOLD → FEINT → ATTACK_PREPARE de la direction opposée
-ATTACK_HOLD → FEINT → BLOCK_PREPARE si une menace arrive
-```
-
-L'aptitude de feinte vaut :
-
-```text
-F = round(0,35 × décision + 0,30 × timing offensif
-        + 0,20 × agressivité + 0,15 × précision)
-durée de feinte = 0,07 + 0,00125 × (100 - F) seconde
-```
-
-Un cooldown de `0,34–0,56 s` et une limite de deux feintes consécutives empêchent une boucle infinie.
-
-### Parade préparée, garde maintenue et riposte
-
-Une parade n'est plus active dès la décision. Elle suit :
-
-```text
-NEUTRAL → BLOCK_PREPARE → BLOCKING → NEUTRAL
-```
-
-```text
-préparation = 0,035 + 0,00115 × (100 - timing défensif) seconde
-maintien = 0,28 + 0,006 × timing défensif + U(0 ; 0,18) + tactique
-
-tactique défensive : +0,25 s ; agressive : -0,08 s ; neutre : 0
-```
-
-Pendant `BLOCK_PREPARE`, la garde est visible mais n'intercepte pas encore. Une nouvelle attaque observée peut déclencher `SWITCH_GUARD` et repasser brièvement par la préparation dans l'autre direction. Après une parade, le défenseur peut rester couvert puis choisir `RIPOSTE` lorsque l'attaquant entre en récupération ; la riposte n'est donc pas une frappe gratuite et instantanée.
-
-### Accel, drag et collision continue
-
-La compétence de manipulation vaut :
-
-```text
-M = round(0,35 × timing offensif + 0,25 × précision
-        + 0,20 × jeu de jambes + 0,20 × décision)
-P(manipulation) = min(0,72 ; 0,08 + 0,0062 × M)
-```
-
-À courte distance, et davantage avec une tactique agressive, l'IA favorise l'`ACCEL`; la tactique défensive favorise légèrement le `DRAG`. Une manipulation choisie ajoute progressivement :
-
-```text
-offset vertical = ±(7 + 0,13 × M) degrés
-offset latéral = ±(4 + 0,075 × M) degrés
-```
-
-L'accel applique son changement tôt dans l'estoc et descend la pointe ; le drag retarde le changement et l'élève. Ce ne sont pas des bonus de dégâts : le yaw, le pitch, la longueur projetée et la trajectoire réelle de la pointe déterminent encore le contact.
-
-Pour ne pas perdre un impact entre deux pas physiques, le moteur calcule la distance minimale entre le défenseur en mouvement et tout le segment parcouru par la pointe depuis le pas précédent. Les corps utilisent en parallèle une séparation souple : une correction de confort de `18 %` commence sous `2 × BODY_RADIUS`, une limite dure subsiste à `1,18 × BODY_RADIUS`, et seulement `28 %` de la vitesse de fermeture est amortie. Les Agents peuvent ainsi se frôler et se croiser sans se téléporter ni rester soudés.
-
-## Angle du corps, baïonnette gauche/droite et appât
-
-L'orientation horizontale du corps et celle de la baïonnette sont maintenant indépendantes. Le petit trait blanc représente le yaw du corps. L'arme possède un angle latéral relatif :
-
-```text
-angle mondial de la baïonnette = yaw du corps + décalage latéral
-décalage latéral ∈ [-50°, +50°]
-```
-
-Une valeur négative dirige l'arme vers la gauche du personnage et une valeur positive vers sa droite. La pointe, les collisions, la détection de menace, la libération de l'estoc et l'orientation de la parade utilisent toutes l'angle réel de la baïonnette, jamais simplement celui du corps.
-
-Sa vitesse latérale est :
-
-```text
-vitesse de rotation de l'arme = 3,4 + 0,018 × jeu de jambes (rad/s)
-```
-
-Pendant la phase active, l'arme conserve 55 % de cette vitesse et pendant la récupération 44 %. Il reste donc possible de travailler l'angle sans remettre instantanément un estoc dans l'axe après son départ. Pendant le maintien, la baïonnette doit être à moins de `0,30 rad`, soit environ 17,2°, de la cible réelle pour une libération normale. Sinon l'Agent continue à maintenir ou finit par libérer automatiquement un coup probablement hors axe.
-
-Un Agent peut créer une ouverture tactique lorsque l'adversaire est neutre et que la distance perçue se trouve entre `1,50 et 2,05 m`. À chaque décision :
-
-```text
-seuil d'appât = floor((prise de décision + contrôle de distance) / 4)
-P(commencer l'appât) = seuil d'appât / 1000
-```
-
-L'Agent déplace alors sa baïonnette vers un côté aléatoire :
-
-```text
-amplitude latérale ~ U(22°, 40°)
-durée ~ U(0,35 ; 0,75) seconde
-```
-
-L'adversaire ne considère l'ouverture comme visible que si l'arme s'écarte de son axe de plus de 18°. Il ne peut tomber dans le piège que lorsque la distance réelle se trouve entre `1,38 et 1,82 m`. Chaque appât possède un numéro distinct : un même adversaire ne fait qu'une seule lecture par ouverture, même si l'IA prend plusieurs décisions pendant sa durée.
-
-La réussite de cette lecture dépend directement du contrôle de distance `C` et reprend la courbe normale d'exécution :
-
-```text
-si C ≤ 10 : A(C) = 0,50
-si C > 10 : A(C) = 0,50 + 0,499 × (C - 10) / 90
-
-P(résister à l'appât) = A(C)
-P(tomber dans l'appât) = 1 - A(C)
-```
-
-S'il échoue, la séquence d'estoc trop court décrite ci-dessous commence. S'il réussit, il effectue un second choix tactique fondé sur la prise de décision `D`, le jeu de jambes `J` et l'agressivité `G` :
-
-```text
-P(avancer et contre-attaquer | distance correctement lue)
-= (D + J + G) / 300
-```
-
-La prise de décision représente la compréhension du piège, le jeu de jambes représente à la fois le choix et la vitesse réelle d'approche, et l'agressivité représente la volonté d'entrer à portée. Si l'Agent refuse cette option, il se décale et ne réévalue plus la même ouverture.
-
-Avec les statistiques actuelles :
-
-| Agent | Tomber dans le piège | Lire puis avancer | Lire puis se décaler |
-| --- | ---: | ---: | ---: |
-| Bleu | 10,63 % | environ 63,15 % | environ 26,21 % |
-| Rouge | 21,17 % | environ 50,45 % | environ 28,38 % |
-
-Lorsqu'il choisit d'avancer, l'Agent prépare un estoc bas rapide et vise le centre du torse. Il continue à avancer pendant la préparation et le maintien ; la limite ordinaire de maintien ne libère pas prématurément son attaque. Il ne frappe que lorsque les deux conditions physiques sont vraies :
-
-```text
-distance réelle ≤ portée horizontale + rayon corporel - 0,08 m
-écart entre la baïonnette et la cible < 0,30 rad
-```
-
-Cette branche est marquée par `CONTRE-APPÂT !`. Elle constitue une menace normale, et non un `baitedAttack` volontairement trop court. L'appâteur annule donc son ouverture. Son délai avant de pouvoir réagir reste :
-
-```text
-temps de réaction = 0,10 + (100 - réaction) × 0,0045 + U(0 ; 0,07)
-```
-
-Une fois ce délai écoulé, il tente une parade. Son timing défensif utilise la courbe normale d'exécution pour choisir la parade basse correcte. Une réaction assez rapide et une bonne direction bloquent l'estoc ; une réaction trop lente, une parade haute ou une parade latérale laissent passer la pointe. La conclusion reste calculée par la collision réelle.
-
-Si la première lecture de distance échoue, la séquence spéciale suivante commence :
-
-```text
-APPÂT visible
-→ PIÉGÉ : ATTACK_PREPARE
-→ estoc haut lancé trop tôt
-→ RECOVERY sans possibilité de parer
-→ PUNITION maintenue par l'appâteur
-→ libération de la punition pendant RECOVERY
-```
-
-Le joueur piégé croit être à portée, mais son estoc n'utilise que :
-
-```text
-portée piégée = portée horizontale normale × 0,62
-récupération piégée = récupération normale × 1,55
-```
-
-Il reste immobile pendant la préparation et l'estoc : l'attaque est donc visiblement trop courte, plutôt qu'annulée par un tirage caché. Les états `ATTACK_PREPARE`, `ATTACK_ACTIVE` et `RECOVERY` interdisent déjà la parade ; la récupération prolongée matérialise la fenêtre pendant laquelle il ne peut rien bloquer.
-
-L'appâteur sait que cet estoc ne peut pas l'atteindre. Il ne gaspille donc pas cette fenêtre en parant : il replace sa baïonnette, prépare un estoc haut au torse et avance seulement jusqu'à conserver une marge de `0,08 m` au-delà de la pointe piégée et du rayon corporel. Il maintient ensuite son attaque tant que l'adversaire frappe, puis la libère dès que celui-ci entre en `RECOVERY`. La punition doit encore faire entrer la pointe réelle dans le cercle adverse.
-
-```text
-distance de sécurité = portée piégée + rayon du corps (0,32 m) + 0,08 m
-```
-
-Après avoir respecté cette limite pendant l'estoc adverse, une collision physique réussie inflige :
-
-```text
-dégâts de punition d'appât = 100
-```
-
-Le joueur piégé meurt donc en un coup et ne peut pas transformer son estoc raté en parade instantanée. Avec les valeurs actuelles, le bleu possède `C = 81`, soit `89,37 %` de résistance et `10,63 %` de risque de tomber. Le rouge possède `C = 62`, soit `78,83 %` de résistance et `21,17 %` de risque. Le contrôle de distance devient ainsi la statistique principale de défense contre l'appât.
-
-## Déroulement d'une attaque
-
-La machine à états principale suit cette séquence :
-
-```text
-NEUTRAL
-→ ATTACK_PREPARE
-→ ATTACK_HOLD
-→ ATTACK_ACTIVE
-→ RECOVERY
-→ NEUTRAL
-```
-
-Deux branches supplémentaires existent pendant le maintien : `ATTACK_HOLD → FEINT → ATTACK_PREPARE` pour changer la direction, ou `ATTACK_HOLD → FEINT → BLOCK_PREPARE` pour abandonner l'attaque et se couvrir. Une parade suit `BLOCK_PREPARE → BLOCKING`; elle ne protège donc pas pendant son temps de préparation.
-
-Une attaque ne peut infliger des dégâts que pendant `ATTACK_ACTIVE`. Dès qu'elle est parée ou qu'elle touche, elle est marquée comme résolue et ne peut pas infliger plusieurs fois des dégâts pendant le même estoc.
-
-Pendant `RECOVERY`, l'Agent ne peut ni attaquer ni parer. Le moteur retire d'abord sa composante de vélocité qui se rapproche encore de la cible, puis impose un recul avec un léger décalage latéral `±0,28`. Il conserve `92 %` de sa vitesse maximale, seulement `64 %` de son accélération normale et le facteur arrière `0,62`. La récupération reste donc visiblement un éloignement, comme dans la version précédente, sans redevenir un recul parfaitement rectiligne et instantané.
-
-L'inclinaison verticale modifie toutes les durées de l'attaque :
-
-```text
-facteur temporel = 1 + 0,35 × clamp(pitch d'attaque / 35°, -1, 1)
-```
-
-- Vers le sol à `-35°` : toutes les durées sont multipliées par `0,65`.
-- À l'horizontale `0°` : les durées de base du tableau sont utilisées.
-- Vers le ciel à `+35°` : toutes les durées sont multipliées par `1,35`.
-
-La longueur visible et utile de la baïonnette dans le plan horizontal suit également sa projection tridimensionnelle :
-
-```text
-longueur horizontale = longueur originale × cos(pitch)
-```
-
-## Attaques hautes et basses
-
-| Direction | Indication | Portée de base | Préparation de base | Actif de base | Récupération de base | Caractéristique |
-| --- | --- | ---: | ---: | ---: | ---: | --- |
-| Haute | `↑` orange | 1,52 m | 0,36 s | 0,15 s | 0,48 s | Portée plus longue, animation complète plus lente |
-| Basse | `↓` cyan | 1,30 m | 0,22 s | 0,09 s | 0,34 s | Portée plus courte, mais préparation, frappe et récupération plus rapides |
-
-La distance donne toujours un avantage de score au coup haut lorsqu'il faut profiter de sa portée et au coup bas à courte distance pour sa vitesse. Elle ne fixe cependant plus le résultat. L'IA ajoute la garde actuelle ou mémorisée de l'adversaire, pénalise ses propres répétitions et applique un bruit lié à la décision. Elle peut donc employer volontairement le même côté pour conditionner l'ennemi, puis feinter vers l'opposé. Le torse est la cible normale et une attaque haute peut parfois tenter la tête. Les jambes ne sont jamais choisies volontairement : elles ne sont touchées qu'à la suite d'une erreur de hauteur, d'un coup trop long ou mal ciblé.
-
-## Directions de parade
-
-| Parade | Indication | Résultat |
-| --- | --- | --- |
-| Haute | `↑` orange | Arrête uniquement une attaque haute |
-| Basse | `↓` cyan | Arrête uniquement une attaque basse |
-| Latérale | `↔` violet | Représente actuellement une erreur et n'arrête pas les estocs hauts ou bas |
-
-La direction doit correspondre et le défenseur doit également faire face à l'attaquant. `BLOCK_PREPARE` annonce la future garde sans la rendre active ; seul `BLOCKING` ou la phase correspondante du Double Block peut intercepter. Le simple fait d'avoir choisi la parade ne garantit donc pas la sécurité : une préparation trop lente, une mauvaise hauteur, une parade latérale ou une mauvaise orientation laisse passer le coup.
-
-## Étourdissement sur parade
-
-Lorsqu'un estoc est correctement bloqué, l'attaquant ne récupère pas immédiatement :
-
-```text
-ATTACK_ACTIVE → BLOCK_STUN (0,18 s) → RECOVERY
-```
-
-Pendant les 0,18 seconde de `BLOCK_STUN`, il ne peut ni se déplacer, ni pivoter, ni attaquer, ni bloquer. Le défenseur ne reçoit pas un estoc automatique : sa garde possède sa propre durée variable. S'il lit la fin de cette garde et la récupération adverse, il peut choisir une `RIPOSTE`; sinon il reste couvert ou reprend son placement.
-
-Une parade normale n'accorde aucun chamber automatique. La mécanique suivante intercepte désormais le coup sans entrer dans l'état `BLOCKING`.
-
-## Statistique Chamber et interception sans parade
-
-La dixième statistique `Chamber`, comprise entre 1 et 100, représente d'abord la tendance de l'Agent à employer cette technique face à une menace. Lorsque l'IA a fini son délai de réaction, se trouve encore en état `NEUTRAL` et a décidé qu'une défense directe est nécessaire :
-
-```text
-P(choisir un chamber contre une attaque ordinaire | défense directe) = Chamber / 100
-```
-
-Une valeur de 1 produit donc environ 1 % de tentatives et une valeur de 100 en produit à chaque attaque ordinaire. Cette statistique ne devient pas une probabilité de réussite et n'est plus réutilisée intégralement pendant une chaîne. Si le chamber n'est pas choisi, l'Agent tente la parade normale.
-
-Les valeurs initiales sont `74` pour le bleu et `93` pour le rouge. Sur une défense directe admissible, le bleu choisit donc le chamber dans 74 % des cas. Le rouge le choisit dans 93 % des cas, mais seulement 3 % de ces tentatives sont sélectionnées comme parfaites avant même le test de timing.
-
-`beginChamberAttempt()` copie la direction haute ou basse du coup adverse et place l'Agent dans `CHAMBER_PREPARE`. Il essaie alors de récupérer le coup avec sa propre attaque. Il ne se trouve pas en parade : une mauvaise direction, une mauvaise orientation ou un timing raté laisse l'estoc adverse infliger ses dégâts normalement.
-
-### Difficulté temporelle commune
-
-La qualité d'exécution dépend des attributs déjà liés à l'instant de l'action :
-
-```text
-T = (timing offensif + réaction + prise de décision) / 3
-σ = max(0,012 ; 0,060 - 0,00045 × T)
-erreur temporelle ~ N(0, σ)
-```
-
-La pointe adverse doit réellement entrer dans le cercle corporel. À cet instant, les deux directions d'attaque doivent être identiques et la baïonnette du chamber doit faire face à l'attaquant à moins de `75°`. `CHAMBER_PREPARE` expire après `0,65 s` si aucun contact n'arrive. Une tentative ratée ne se transforme jamais gratuitement en parade.
-
-### Chamber simple
-
-Le chamber simple réussit si :
-
-```text
-abs(erreur temporelle) ≤ 0,025 s
-```
-
-Après l'interception, il conserve le coup pendant `0,24 s` dans `CHAMBER_HOLD`, puis libère `CHAMBER_ACTIVE`. L'attaquant original revient à `NEUTRAL` et réévalue immédiatement la menace. Avec une bonne réaction et un bon placement, il peut donc bloquer ce retour ou tenter de le re-chamber. Un re-chamber reproduit exactement le même processus dans l'autre sens ; `chamberChain` compte 2, 3, etc., et l'interface affiche `CHAMBER ×2`, `CHAMBER ×3` jusqu'à ce qu'un Agent bloque, rate, esquive ou soit touché.
-
-Une chaîne devenant rapidement trop risquée, la statistique complète n'est plus appliquée à chaque retour. Pour un retour simple de rang `n` :
-
-```text
-facteur de re-chamber(n) = max(0,05 ; 0,50 - 0,10 × n)
-P(re-chamber) = Chamber / 100 × facteur de re-chamber(n)
-P(choisir la parade) = 1 - P(re-chamber)
-```
-
-Les facteurs des rangs 1, 2, 3 et 4 valent respectivement 40 %, 30 %, 20 % et 10 %. À partir du rang 5, ils restent à 5 %. Même un Agent avec Chamber 100 préfère donc la parade dans 60 % des premiers retours, 90 % des quatrièmes et 95 % des chaînes plus longues.
-
-Le retour répété devient également plus lisible, ce qui améliore le choix de la bonne hauteur de parade :
-
-```text
-compétence de parade contre la chaîne = min(100 ; timing défensif + 8 × n)
-```
-
-Ce bonus ne concerne que la parade d'un chamber simple. Une attaque ordinaire conserve le timing défensif normal. Le chamber parfait verrouille toujours l'adversaire : il ne lui laisse aucune occasion de bloquer ou de re-chamber.
-
-Le retour simple vise normalement le torse, mais le jeu de jambes introduit l'imprécision du replacement :
-
-```text
-σhauteur = 0,06 + (100 - jeu de jambes) × 0,002 m
-σyaw = 0,05 + (100 - jeu de jambes) × 0,002 rad
-```
-
-Une touche simple au torse inflige normalement `50 dégâts`. Elle ne devient létale que si le replacement réel est exceptionnellement favorable :
-
-```text
-distance idéale = portée horizontale projetée + rayon du corps - 0,10
-qualité distance = max(0 ; 1 - abs(distance - distance idéale) / 0,45)
-qualité face = max(0 ; 1 - abs(erreur d'orientation) / 0,40)
-P(torse létal) = jeu de jambes / 500 × qualité distance × qualité face
-```
-
-Même avec 100 en jeu de jambes et deux qualités parfaites, la limite reste 20 %. Le footwork réel fait donc que la position idéale de one-shot reste rare en duel. Une erreur montant jusqu'à la petite tête inflige néanmoins 100 ; une erreur tombant dans les jambes inflige 40.
-
-### Chamber parfait
-
-Le type parfait est inaccessible à `Chamber ≤ 90`. Au-dessus de 90, la sélection reste volontairement rare :
-
-```text
-P(parfait | chamber choisi) = (Chamber - 90) / 100
-```
-
-Avec 91, elle vaut 1 % ; avec 93, 3 % ; même avec 100, seulement 10 %. Le succès exige ensuite :
-
-```text
-Chamber > 90 et abs(erreur temporelle) ≤ 0,004 s
-```
-
-Cette fenêtre totale de 8 ms est beaucoup plus difficile que celle du chamber simple. En cas de succès, l'attaquant original entre dans `BLOCK_STUN` et ne peut ni bloquer ni re-chamber. Le retour part immédiatement en `CHAMBER_ACTIVE`, vise le torse et inflige 100 dégâts si la collision horizontale réelle aboutit. Les trois filtres — niveau supérieur à 90, sélection rare et fenêtre de ±4 ms — empêchent le chamber parfait de devenir un one-shot régulier.
-
-## Erreurs d'exécution et statistiques
-
-Après avoir choisi une action, l'agent peut encore mal l'exécuter. La courbe de réussite de base est :
-
-```text
-Statistique 1–10 : 50 %
-Statistique 11–100 : 50 % + 49,9 % × (statistique - 10) / 90
-```
-
-| Statistique | Exécution correcte |
-| ---: | ---: |
-| 1–10 | 50,0 % |
-| 25 | environ 58,3 % |
-| 50 | environ 72,2 % |
-| 75 | environ 86,0 % |
-| 100 | 99,9 % |
-
-Cette courbe s'applique actuellement aux opérations discrètes importantes :
-
-- Défense : choix de la bonne hauteur. En cas d'erreur, l'agent peut choisir l'autre hauteur ou une parade latérale.
-- Prise de décision : choix d'une attaque adaptée à la distance et volonté d'exploiter un appât correctement lu.
-- Précision : elle agit à la fois sur l'angle horizontal et la hauteur verticale. Une réussite produit une petite déviation ; un échec peut faire passer l'arme à côté, au-dessus de la tête ou trop bas dans les jambes.
-- Contrôle de distance : lecture unique d'un appât visible ; un échec déclenche un estoc prématuré et trop court.
-
-Les autres aptitudes produisent des erreurs continues :
-
-- Le contrôle de distance modifie aussi l'erreur continue sur la distance perçue.
-- La réaction détermine le délai entre la détection et la réponse et fournit 45 % de la perception périphérique dérivée.
-- Le jeu de jambes modifie la vitesse de déplacement et de rotation, le choix d'avancer après avoir lu un appât, et constitue 50 % de la protection du dos dérivée.
-- Le timing offensif influence le moment où l'attaque maintenue est libérée.
-- L'agressivité influence la fréquence des attaques d'essai et la volonté d'avancer sur un appât identifié.
-- Sortir de sa zone détermine la fréquence et la durée du dézonage, puis la répartition entre recul, avance oblique et orbite.
-- Chamber détermine la fréquence du choix d'interception ; le timing offensif, la réaction et la décision déterminent séparément l'erreur temporelle de son exécution.
-- La réaction, la décision et Sortir de sa zone complètent respectivement 22 %, 18 % et 10 % de la protection du dos.
-- La décision et le contrôle de distance complètent respectivement 35 % et 20 % de la perception périphérique ; avec la réaction, ces trois valeurs déterminent si le deuxième adversaire est vu et combien de temps sa position reste mémorisée.
-- La décision, le contrôle de distance et l'agressivité déterminent séparément la fréquence d'utilisation d'une occasion de freekill ; la précision reste responsable de l'exécution réelle.
-
-Une précision de 80 ne signifie donc pas « 80 % de chances de toucher ». La pointe réelle de la baïonnette doit toujours entrer en collision avec l'adversaire.
-
-## Points de vie, zones touchées et dégâts
-
-Chaque agent commence avec `100 PV`. Le corps utilise une hauteur continue de `0 à 1,80 m` et la taille de chaque zone détermine directement sa fenêtre verticale :
-
-| Zone | Intervalle | Taille verticale | Sélection | Dégâts |
-| --- | ---: | ---: | --- | --- |
-| Jambes | 0–0,65 m | 0,65 m | Jamais visées volontairement ; erreur trop basse ou coup trop long | 40 dégâts fixes |
-| Torse | 0,65–1,50 m | 0,85 m | Cible normale, la plus grande et la plus simple | 95 % : 100 dégâts ; 5 % : 50 dégâts |
-| Tête | 1,50–1,80 m | 0,30 m | Tentative possible avec une attaque haute, fenêtre la plus petite | 100 dégâts fixes |
-
-La tête ne mesure que 0,30 m dans ce modèle. À erreur égale, une tentative peut donc retomber sur le torse ou passer au-dessus. Le torse mesure 0,85 m et constitue de loin la cible la plus facile. Une touche aux jambes révèle une erreur verticale importante ; elle n'est pas une décision offensive normale.
-
-Les dégâts sont cumulatifs. Un agent déjà blessé peut donc être achevé par un nouveau coup à la jambe ou un coup de 50 au torse. Il passe à `DEAD` uniquement lorsque ses PV atteignent zéro.
-
-La vue de dessus ajoute une hauteur continue pour représenter l'axe vertical invisible. Le calcul complet est :
-
-1. La pointe doit réellement entrer dans le cercle de collision adverse.
-2. Pendant la préparation, l'agent choisit le torse ou tente parfois la tête avec une attaque haute ; il ne choisit jamais les jambes.
-3. Une erreur verticale continue, déterminée par la précision, est ajoutée au centre de la cible voulue.
-4. Une hauteur finale dans `0–0,65 m`, `0,65–1,50 m` ou `1,50–1,80 m` touche respectivement les jambes, le torse ou la tête.
-5. Une hauteur inférieure à 0 ou supérieure à 1,80 m rate verticalement, même si la trajectoire 2D traverse le corps.
-6. Les dégâts ne sont calculés que si le contact horizontal et la hauteur sont tous les deux valides.
-
-## IA défensive
-
-Les agents suivent une stratégie où la survie passe avant l'attaque :
-
-1. Vérifier si un adversaire actuellement visible les vise et se trouve dans la portée de menace de son attaque.
-2. Face à une menace directe, choisir selon la statistique Chamber entre une interception risquée et la parade normale.
-3. Reculer ou se décaler lorsque l'espace le permet, puis revenir au centre près des limites.
-4. Éviter d'entrer inutilement à portée lorsqu'une attaque adverse est en préparation.
-5. Chercher une contre-attaque après un coup adverse manqué.
-6. Si l'adversaire en récupération est déjà trop loin, attendre ou tourner autour de lui au lieu de le poursuivre sans arrêt.
-7. Exploiter un dos visible uniquement si l'adversaire direct semble assez loin, sans annuler les erreurs de distance ou de précision.
-8. Ne lancer que de rares attaques d'essai lorsque les deux agents sont au repos et en sécurité.
-
-La priorité à la survie ne rend pas la défense parfaite. Un agent faible peut comprendre la bonne réponse, mais réagir trop tard, choisir la mauvaise hauteur, effectuer une parade latérale, frapper à côté ou mal évaluer la distance.
-
-## Tactiques individuelles
-
-La préparation propose `Défensive`, `Neutre` ou `Agressive` séparément pour chaque joueur. La tactique ne modifie ni les statistiques brutes ni les dégâts : elle pondère les choix de l'IA. `Neutre` conserve exactement les multiplicateurs de base.
-
-| Modificateur | Défensive | Neutre | Agressive |
-| --- | ---: | ---: | ---: |
-| Chamber contre une attaque ordinaire | ×0,45 | ×1,00 | ×1,00 ; ×1,30 si le coup est lisible |
-| Utilisation d'une occasion de backstab | ×0,75 | ×1,00 | ×1,25 |
-| Attaque d'essai | ×0,45 | ×1,00 | ×1,80 |
-| Déclenchement du dézonage | ×1,35 | ×1,00 | ×0,75 |
-| Déclenchement de l'appât | ×0,70 | ×1,00 | ×1,35 |
-| Engagement en défense directe | +25 | 0 | -10 |
-| Seuil de libération d'un estoc maintenu | -10 | 0 | +15 |
-| Poursuite d'un dézonage adverse | -25 | 0 | +25 |
-| Avance après lecture d'un appât | -35 | 0 | +35 |
-| Distance déclenchant l'approche | 1,95 m | 1,78 m | 1,55 m |
-| Avance pendant un maintien | au-delà de 1,65 m | au-delà de 1,45 m | au-delà de 1,25 m |
-
-### Défensive
-
-La tactique défensive multiplie la volonté de Chamber initiale par `0,45`, ce qui laisse beaucoup plus de décisions à la parade normale. Le bonus `+25` d'engagement fait choisir plus tôt entre parade et déplacement face à une menace préparée ; il n'invente pas de compétence, car la direction correcte reste déterminée par le véritable timing défensif.
-
-Elle produit 55 % d'attente dans les décisions calmes, davantage de recul ou de déplacement latéral, 35 % de dézonages supplémentaires et 55 % d'attaques d'essai en moins. Lors d'un dézonage, le poids de la posture `BLOCK` reçoit `+40`. Un adversaire en `RECOVERY` à moins de 2,02 m reste une faille valable : l'Agent défensif peut alors contre-attaquer au lieu de rester passif sans raison.
-
-### Agressive
-
-La tactique agressive approche dès 1,55 m, continue d'avancer avec un estoc maintenu jusqu'à 1,25 m, multiplie les attaques d'essai par `1,80` et les appâts par `1,35`. Elle poursuit systématiquement un adversaire trop loin mais en récupération, reçoit `+25` pour suivre son dézonage et `+35` pour avancer après avoir reconnu un appât. Le poids de la posture `HOLD` pendant son propre dézonage reçoit également `+40`.
-
-Un « coup trop simple » possède une définition mesurable : ce n'est ni un appât ni un retour de Chamber, et l'adversaire se trouve en `ATTACK_HOLD`, ou son estoc est déjà actif avec moins de 12° de décalage latéral. Uniquement dans ce cas :
-
-```text
-P(Chamber agressif | coup lisible) = min(1 ; Chamber / 100 × 1,30)
-```
-
-Les pénalités de re-chamber 40 %, 30 %, 20 %, 10 % puis 5 % sont appliquées ensuite. La tactique agressive exploite donc davantage les attaques évidentes sans réintroduire les chaînes de dizaines de Chambers.
-
-## Informations visuelles
-
-- Trait blanc dans le cercle : orientation de l'agent.
-- Baïonnette grise : posture neutre.
-- Baïonnette jaune pâle pulsante et arc pointillé frontal : préparation ou maintien d'un estoc ordinaire.
-- Baïonnette jaune vif épaissie : phase active d'un estoc ordinaire ; elle peut réellement infliger des dégâts à cet instant.
-- Baïonnette orange sombre : récupération, puis retour automatique au gris.
-- Large halo cyan autour de l'arme de parade : parade active ; la couleur centrale orange, cyan ou violette conserve sa direction.
-- Étincelle jaune et blanche au contact : parade réussie, visible pendant 0,22 seconde.
-- Textes `PRÊT`, `ATTAQUE`, `RÉCUP.` et `PARADE` au-dessus de l'Agent ; leur version chinoise est « 準備 », « 攻擊 », « 恢復 » et « 格擋 ».
-- `↑` orange : attaque ou parade haute.
-- `↓` cyan : attaque ou parade basse.
-- `↔` violet : parade latérale erronée.
-- Petit cercle à l'avant du corps : repère visuel de la tête.
-- Petit trait à l'arrière : repère de la direction des jambes.
-- Arc rouge de 115° à 245° derrière le corps et `DOS EXPOSÉ` : au moins un ennemi se trouve actuellement dans le secteur impossible à parer.
-- `BACKSTAB !` rouge : une pointe valide vient de toucher dans ce secteur arrière.
-- `Opportunité de backstab`／「背刺機會」 dans la décision : l'Agent vient de choisir l'ouverture freekill ; la baïonnette conserve les couleurs ordinaires car la collision reste normale.
-- Texte rouge flottant : dernière zone touchée et dégâts.
-- Panneaux latéraux : PV, statistiques, état, décision, direction, distance, protection du dos dérivée, cible voulue, hauteur réelle et blessure récente.
-- À droite des PV : tactique active (`T : Défensive`, `T : Neutre` ou `T : Agressive`).
-- Ligne compacte « Angles H/V/A » : yaw horizontal, pitch vertical et angle latéral de l'arme ; une valeur verticale négative vise le sol, une valeur positive le ciel, tandis que le troisième nombre montre le décalage gauche/droite de la baïonnette.
-- Lignes pointillées colorées : cible ennemie actuellement verrouillée par chaque Agent.
-- `APPÂT ←/→` orange : l'Agent sort volontairement sa baïonnette de l'axe pour provoquer une attaque.
-- `CONTRE-APPÂT !` bleu : l'Agent a lu la distance, avance jusqu'à portée réelle et prépare un estoc bas.
-- `PIÉGÉ !` rouge : l'Agent a mal lu la distance et s'engage dans un estoc trop court impossible à convertir en parade.
-- `PUNITION !` verte : l'appâteur prépare ou libère la contre-attaque mortelle pendant la récupération adverse.
-- `DÉZONAGE` vert : l'Agent est en train de changer durablement de position ; sa décision précise recul, avance oblique gauche/droite ou orbite gauche/droite.
-- `✕` rouge : attaquant bloqué et entièrement verrouillé pendant 0,18 seconde.
-- `CHAMBER !` violet : chamber simple réussi ; `CHAMBER ×N` indique une chaîne de re-chambers.
-- `CHAMBER PARFAIT !` doré : chamber à ±4 ms, retour immédiat et adversaire verrouillé.
-- Boutons en haut à gauche : sélection directe de 0,25×, 0,5×, 1×, 2× ou 4× ; le bouton actif est désactivé pour indiquer la vitesse courante.
-- Bouton en haut à droite : `中文` dans l'interface française et `Français` dans l'interface chinoise ; toute l'interface change immédiatement.
-
-### Lecture de la portée et des actions ordinaires
-
-`Musketeer.isBasicAttack()` exclut les Chambers, les attaques piégées et les réponses spéciales à l'appât. Ces actions spéciales conservent donc leurs couleurs et leurs messages actuels. Pour un estoc ordinaire, `paintWeapon()` superpose une ligne transparente large puis un noyau plus fin : pendant la phase active, leurs épaisseurs valent respectivement 3,8 et 1,55 fois l'épaisseur normale. Le jaune reste ainsi lisible même lorsque les combattants sont éloignés.
-
-Pendant `ATTACK_PREPARE` et `ATTACK_HOLD`, `paintAttackRange()` dessine uniquement devant la baïonnette un arc de `±55°`. Son rayon représente la distance maximale entre les centres permettant un contact :
-
-```text
-rayon visuel = longueur projetée de l'estoc + rayon du corps
-```
-
-Un adversaire dont le centre reste au-delà de cet arc ne peut pas être touché par une libération immédiate. Être à l'intérieur ne garantit pas la touche : l'angle horizontal, la hauteur, la direction de parade et le timing réel restent vérifiés par la simulation. L'arc disparaît après la préparation afin de ne pas encombrer durablement le 2v2.
-
-Lorsqu'une parade valide intercepte la pointe, `checkHit()` enregistre sa position dans `blockSparkX/Y` et démarre `blockSparkTime` à `0,22 s`. `paintBlockSpark()` dessine huit rayons jaune-blanc qui grandissent et s'effacent au point exact du contact.
-
-## Double Block : double parade haute/basse en 2v1
-
-Le Double Block répond au cas précis où deux ennemis visent le même Agent avec deux hauteurs opposées. Ce n'est ni une invulnérabilité temporaire ni une parade à 360°. Le moteur doit d'abord résoudre physiquement une première parade normale. Seulement à cet instant, `tryBeginDoubleBlock()` cherche un deuxième estoc qui arrivera presque immédiatement.
-
-### Onzième statistique et aptitude effective
-
-La valeur modifiable `doubleBlock`, comprise entre 1 et 100, pèse pour moitié dans une aptitude effective `E`. Les aptitudes déjà présentes représentent l'exécution autour de cette technique :
-
-```text
-E = round(0,50 × Double Block
-        + 0,225 × timing défensif
-        + 0,15 × réaction
-        + 0,075 × décision
-        + 0,05 × jeu de jambes)
-```
-
-- `Double Block` mesure la maîtrise spécifique du changement haut/bas ;
-- le timing défensif détermine la qualité de la première parade et pèse ensuite 22,5 % dans l'enchaînement ;
-- la réaction aide à lire le second impact ;
-- la décision aide à identifier lequel des deux estocs doit être pris en deuxième ;
-- le jeu de jambes aide à conserver l'orientation et la position pendant les deux contacts.
-
-Le 50 % demandé est donc strictement conservé. Les quatre autres statistiques ne remplacent pas la nouvelle caractéristique et ne peuvent pas, seules, créer un spécialiste.
-
-### Conditions géométriques obligatoires
-
-Une première parade réussie n'ouvre une tentative que si un autre ennemi vérifie simultanément toutes les conditions suivantes :
-
-1. il est vivant, a réellement commencé `ATTACK_ACTIVE` ou `CHAMBER_ACTIVE`, et son estoc n'a pas déjà été résolu ;
-2. sa `target` est le même défenseur ;
-3. son attaque est opposée à la première : haute après basse ou basse après haute ;
-4. le défenseur le voit actuellement selon `OpponentAwareness.visible` ; une dernière position mémorisée ne suffit pas ;
-5. il se trouve devant le défenseur : une attaque arrière reste un backstab impossible à parer ;
-6. sa baïonnette pointe vers le défenseur avec au plus `34°` d'erreur ;
-7. sa distance centrale ne dépasse pas sa portée projetée, le rayon corporel et une marge d'anticipation de `0,35 m` ;
-8. l'estoc n'a pas dépassé 65 % de sa phase active et le temps estimé avant son extension maximale ne dépasse pas `0,20 s`.
-
-Il faut donc deux attaques visibles et réellement engagées. Deux adversaires seulement proches, deux attaques de même hauteur, une feinte encore en préparation, une attaque latérale non détectée ou un coup dans le dos ne déclenchent jamais `DOUBLE_BLOCK`.
-
-### Probabilité de tentative
-
-Lorsque toutes les conditions physiques sont réunies, l'Agent reconnaît et tente la séquence avec :
-
-```text
-P(tenter le Double Block | deux menaces valides) = (E / 100)³
-```
-
-Le cube rend volontairement la technique très difficile :
-
-| `E` | Probabilité de tentative |
-| ---: | ---: |
-| 25 | 1,56 % |
-| 50 | 12,50 % |
-| 75 | 42,19 % |
-| 90 | 72,90 % |
-| 100 | 100 % |
-
-Cette probabilité ne garantit pas la seconde parade. Elle autorise seulement l'entrée dans l'état `DOUBLE_BLOCK`. La première parade doit déjà avoir choisi la bonne direction avec les règles ordinaires de `defenseTiming`; une mauvaise première parade ne donne donc aucun tirage de Double Block.
-
-### Changement de hauteur et échec physique
-
-Après le premier contact, le défenseur garde brièvement sa première direction, mémorise le deuxième attaquant dans `doubleBlockThreat`, puis change vers `doubleBlockSecondDirection`. Le délai vaut :
-
-```text
-temps de changement = 0,19 - 0,00125 × E seconde
-durée de l'état = max(0,26 ; temps de changement + 0,12) seconde
-```
-
-| `E` | Changement haut/bas |
-| ---: | ---: |
-| 25 | 0,15875 s |
-| 50 | 0,12750 s |
-| 75 | 0,09625 s |
-| 90 | 0,07750 s |
-| 100 | 0,06500 s |
-
-`updateState()` ne remplace `blockDirection` qu'après ce délai. Pendant `DOUBLE_BLOCK`, `moveAndTurn()` oriente le corps et la baïonnette vers le second attaquant visible. Lorsque sa pointe entre dans le cercle corporel, `checkHit()` exige encore :
-
-```text
-doubleBlockSwitched == true
-doubleBlockThreat == attaquant du second impact
-blockDirection.blocks(direction du second estoc)
-écart de la baïonnette défensive vers cet attaquant < 75°
-attaque non arrière
-```
-
-Si le deuxième coup arrive avant la fin du changement, si l'Agent s'est mal orienté ou si un autre attaquant touche à sa place, les dégâts sont appliqués normalement. Le Double Block n'accorde aucune réduction de dégâts et ne modifie pas les règles de tête, torse ou jambes.
-
-### Lecture à l'écran
-
-L'état et la décision affichent `Double parade` en français et `雙重格擋` en chinois. Le symbole violet `⇅` remplace momentanément la flèche unique, la baïonnette prend successivement la couleur de la direction courante et un succès affiche `DOUBLE BLOCK !`／`雙重格擋！`. Chaque contact conserve aussi l'étincelle de parade à la position exacte de la pointe. La fiche latérale affiche la statistique brute « Double Block » ; l'aptitude effective `E` reste un calcul interne expliqué ci-dessus.
-
-## Parcours de l'interface : menu, match amical et équipes
-
-`Main` conserve désormais un seul `JFrame` et remplace son panneau central à chaque étape. `show()` applique le nouveau titre, appelle `setContentPane()`, `pack()` et recentre la fenêtre. Le parcours complet est :
-
-```text
-Menu principal
-→ JOUER
-→ MATCH AMICAL 2v2
-→ CRÉATION DES ÉQUIPES
-→ JOUER LE MATCH
-→ Combat 2v2
-```
-
-Les deux premiers écrans utilisent `MenuPanel`. Son enum `Page` choisit entre `MAIN` et `PLAY`, tandis que `MenuAction` renvoie `PLAY`, `FRIENDLY_MATCH`, `BACK` ou `QUIT` à `Main`. Cette séparation évite que les boutons créent eux-mêmes des fenêtres ou connaissent le moteur de combat. Le menu mesure `1000 × 650`, possède un fond dessiné, une carte centrale, la touche Entrée pour confirmer, `L` pour la langue et Échap pour revenir depuis l'écran des modes.
-
-Après « PRÉPARER LE MATCH », `SetupPanel` affiche un onglet « ÉQUIPE BLEUE » et un onglet « ÉQUIPE ROUGE ». Chacun contient un nom d'équipe limité à 24 caractères et deux `PlayerEditorPanel`, soit quatre joueurs configurables :
-
-- nom du joueur, obligatoire et limité à 18 caractères afin de rester lisible dans le panneau de combat ;
-- tactique individuelle : Défensive, Neutre ou Agressive ;
-- jeu de jambes ;
-- contrôle de distance ;
-- précision ;
-- timing d'attaque ;
-- timing de défense ;
-- réaction ;
-- agressivité ;
-- décision ;
-- sortir de sa zone ;
-- chamber ;
-- Double Block.
-
-Chaque statistique utilise un `JSpinner` construit avec :
-
-```java
-new SpinnerNumberModel(valeurParDéfaut, 1, 100, 1)
-```
-
-La valeur ne peut donc pas sortir de l'intervalle 1–100. Lorsque « JOUER LE MATCH » ou « 開始比賽 » est pressé, même avec la touche Entrée, le programme valide d'abord le texte encore en cours d'édition dans chaque spinner. Une erreur garde l'écran ouvert et affiche sa cause dans la langue active. Chaque joueur valide produit un objet immuable :
-
-```java
-record AgentConfiguration(String name, AgentStats stats, Tactic tactic)
-```
-
-Les deux joueurs sont ensuite regroupés avec le nom de leur équipe :
-
-```java
-record TeamConfiguration(String name, AgentConfiguration firstPlayer, AgentConfiguration secondPlayer)
-```
-
-`Main.showCombat()` installe alors `MapPanel` dans la même fenêtre. Son titre reprend les deux noms d'équipe et les configurations sont transmises par les constructeurs :
-
-```text
-SetupPanel
-→ TeamConfiguration bleue + TeamConfiguration rouge + UiLanguage
-→ MapPanel(équipe bleue, équipe rouge, langue, retour menu)
-→ DuelSimulation(configurations bleues[2], configurations rouges[2])
-→ blueTeam[2] + redTeam[2]
-```
-
-`SetupPanel.updateLanguage()` traduit le fil d'Ariane, le titre, les noms d'équipe, les onglets, les boutons, l'aide et les erreurs. Il appelle ensuite `PlayerEditorPanel.setLanguage()` pour traduire les noms des joueurs, « Nom du joueur », « Tactique » et les onze caractéristiques. Le renderer du `JComboBox<Tactic>` utilise `Tactic.label(language)` : Défensive, Neutre et Agressive deviennent donc 防守, 中立 et 進攻 sans modifier la tactique sélectionnée ni les textes déjà saisis.
-
-La langue active voyage dans chaque callback de navigation. Elle est donc conservée entre le menu principal, le choix du mode, la création des équipes et le combat.
-
-`MapPanel` affiche les deux noms créés dans l'en-tête du combat et réutilise le nom du vainqueur dans le message final. `DuelSimulation` conserve seulement les quatre configurations de joueurs. La touche `R` restaure les PV, les positions, les cibles et les états, mais recrée les mêmes noms, statistiques et tactiques. Le bouton `MENU` ou Échap arrête le `Timer` du combat puis rappelle `Main.showMainMenu(language)`. `MapPanel.removeNotify()` arrête également le timer lorsque le panneau quitte la fenêtre, afin qu'une ancienne partie ne continue jamais en arrière-plan.
-
-Les quatre fiches par défaut sont centralisées dans `AgentConfiguration.defaultBlue()`, `defaultBlueTwo()`, `defaultRed()` et `defaultRedTwo()`.
-
-## Sélection de cible et victoire 2v2
-
-Chaque `Musketeer` conserve son numéro d'équipe et une référence `target`. `DuelSimulation.selectTarget()` compare seulement les ennemis visibles ou encore mémorisés. Une attaque frontale ou latérale déjà détectée, orientée vers l'Agent et à portée projetée devient une menace immédiate : en posture neutre ou en parade, l'Agent peut abandonner sa cible précédente. Une attaque latérale éloignée qui n'a pas été perçue ne déclenche aucune réaction magique. Un ennemi arrière reconnu est traité par la protection du dos et ne force pas un demi-tour tant qu'une cible frontale connue existe.
-
-Hors urgence, le score de cible part de la distance visible ou de la dernière position mémorisée. Les bonus liés à la récupération, à l'attaque du coéquipier et à la cible pressée par l'allié ne sont appliqués que si l'ennemi est actuellement visible : l'IA ne lit pas son état derrière son dos. Une erreur aléatoire proportionnelle à `101 - decisionMaking` empêche les faibles décideurs de choisir systématiquement la meilleure cible. `findFreeKillTarget()` constitue l'exception volontaire au refus de tourner vers une cible arrière : il vise un ennemi dont l'Agent voit le dos, et non un ennemi situé derrière l'Agent lui-même.
-
-Après un changement ordinaire, la cible reste verrouillée pendant `0,55 + 0,008 × décision` seconde afin d'éviter un basculement permanent. La mort de la cible annule cette attente : un Agent neutre choisit un ennemi encore visible ou mémorisé, mais peut rester temporairement sans cible si le second combattant n'a jamais été perçu. Un Agent engagé termine d'abord son action pour ne pas faire pivoter magiquement l'estoc en cours. Les lignes pointillées et la distance des fiches sont des informations de spectateur ; leur précision n'est pas donnée telle quelle à l'IA.
-
-`avoidTeammate()` repousse progressivement un Agent lorsque son allié se trouve à moins de 1,05 m. `separateAgents()` vérifie ensuite toutes les paires vivantes avec la collision souple décrite plus haut : elle corrige doucement la zone de confort et ne force la séparation complète qu'à la limite dure. Les estocs ne testent que les deux adversaires, donc il n'y a pas de dégâts alliés dans cette version ; `resolveAttack()` choisit l'ennemi dont le corps est le plus proche du segment balayé par la pointe, qui peut être différent de la cible voulue.
-
-Un premier mort ne termine plus la partie. `updateWinner()` est appelé après tous les impacts du pas physique et fixe `winningTeam` uniquement lorsqu'aucun membre d'une équipe ne vit encore. Si les quatre Agents tombent dans le même pas, le résultat est `DRAW`.
-
-## Commandes
-
-| Touche | Action |
-| --- | --- |
-| `Espace` | Pause / reprise |
-| `R` | Recommencer le combat 2v2 et restaurer 100 PV |
-| `L` | Basculer entre le français et le chinois sur tous les écrans |
-| `Entrée` | Confirmer l'action principale du menu ou lancer le match depuis la création des équipes |
-| `Échap` | Revenir à l'écran précédent ; depuis le combat, retourner au menu principal |
-| `0` | Vitesse 0,25× |
-| `5` | Vitesse 0,5× |
-| `1` | Vitesse 1× |
-| `2` | Vitesse 2× |
-| `4` | Vitesse 4× |
-
-## Lancement
-
-Le projet est configuré avec le JDK 25. Il est possible d'exécuter `Main` dans IntelliJ IDEA ou d'utiliser PowerShell depuis la racine :
+NWMANAGER est un prototype Java Swing de gestion et de simulation de groupfight à la baïonnette.
+Le joueur crée deux équipes, règle les caractéristiques et la tactique de leurs Agents, puis observe
+un combat physique en 2v2 ou en 3v3. Les Agents se déplacent librement dans un plan 2D, orientent leur
+corps et leur baïonnette, perçoivent imparfaitement plusieurs menaces et prennent eux-mêmes leurs
+décisions d'attaque, de parade, de déplacement et de coopération.
+
+Le 3v3 n'est plus limité à son premier prototype de déplacement. Il comprend maintenant l'approche
+dynamique, l'attention limitée, les réseaux de couverture, les plans d'attaque, revenge,
+contre-couverture, les clusters descriptifs et les transitions transactionnelles vers 3v2, 3v1,
+2v2, 2v1 et 1v1. Le chantier en cours est le jalon 6.3 consacré à la neutralisation permanente des
+joueurs morts ; son noyau 6.3.1 est intégré, tandis que les validations spécialisées et les nouveaux
+batchs restent à terminer.
+
+[README en chinois traditionnel](README.md)
+
+## 1. Lancer le jeu
+
+Depuis Windows, le plus simple est de double-cliquer sur `run.bat`. En ligne de commande :
 
 ```powershell
 javac -encoding UTF-8 -d .\out .\src\*.java
 java -cp .\out Main
 ```
 
-Le menu principal apparaît en premier. Choisissez `JOUER`, puis `MATCH AMICAL 2v2`, nommez les deux équipes et configurez les quatre joueurs. Le bouton `中文`／`Français` traduit chaque écran, les tactiques et les messages d'erreur. « JOUER LE MATCH » installe la page de combat dans la même fenêtre et dans la même langue.
+`run.bat` compile tous les fichiers Java en UTF-8 puis lance `Main.main`. Deux raccourcis
+supplémentaires existent :
 
-## Architecture
+```text
+run-controlled-2v1.bat
+run-controlled-2v2.bat
+```
 
-| Fichier | Rôle |
-| --- | --- |
-| `Main.java` | Contrôleur de la fenêtre unique et navigation menu → mode → équipes → combat |
-| `MenuPanel.java` | Menu principal et écran Jouer / Match amical bilingues |
-| `SetupPanel.java` | Création des deux équipes, quatre joueurs, retour, langue et validation du lancement |
-| `PlayerEditorPanel.java` | Libellés bilingues, nom, tactique et onze sélecteurs 1–100 pour un joueur |
-| `AgentConfiguration.java` | Configuration immuable nom + statistiques + tactique et quatre fiches par défaut |
-| `TeamConfiguration.java` | Nom d'équipe et ses deux configurations de joueurs validées |
-| `Tactic.java` | Défensive, Neutre, Agressive et modificateurs de décision associés |
-| `MapPanel.java` | Arène, quatre fiches, lignes de cible, PV, commandes et retour sûr au menu |
-| `DuelSimulation.java` | Perception, mémoire, choix de cible, freekill, protection du dos, double parade, IA, collisions, dégâts et victoire collective |
-| `Musketeer.java` | Équipe, cible, table de perception, données instantanées, double parade, PV, baïonnette, blessures et rendu |
-| `OpponentAwareness.java` | Visibilité, dernière position connue, durée de mémoire et historique observé des attaques/parades d'un ennemi |
-| `AgentStats.java` | Les onze statistiques et les aptitudes dérivées de dos, perception, Double Block, engagement, feinte et manipulation |
-| `EngagementPhase.java` | Sonde, engagement, traversée, sortie et remise en garde du cycle spatial |
-| `AttackManipulation.java` | Estoc neutre, accel ou drag actuellement exécuté |
-| `ChamberType.java` | Type `NONE`, `SIMPLE` ou `PERFECT` du chamber en cours |
-| `DezoneMovement.java` | Recul, avances obliques et orbites gauche/droite du dézonage |
-| `DezoneStance.java` | Posture neutre, parade ou maintien pendant le dézonage |
-| `CombatState.java` | États de combat |
-| `CombatDirection.java` | Valeurs, symboles et couleurs des attaques hautes et basses |
-| `BlockDirection.java` | Parades hautes, basses et latérales |
-| `HitZone.java` | Tête, torse et jambes |
-| `Decision.java` | Action actuellement choisie |
-| `UiLanguage.java` | Langues française et chinoise de l'interface |
+Chemin de l'interface :
 
-`DuelSimulation` ne dépend pas de `MapPanel`. Le même moteur peut donc servir plus tard à simuler rapidement de nombreux combats sans interface graphique.
+```text
+Menu principal → Jouer → Match amical
+→ création et modification des quatre joueurs
+→ Start → combat MODERN_2V2
 
-## Limites actuelles
+Menu principal → Jouer → Match expérimental 3v3
+→ création et modification des six joueurs
+→ Start → groupfight MODERN_3V3 avec transitions 3v2, 3v1, 2v2, 2v1 et 1v1
+```
 
-Le prototype gère maintenant un combat fixe 2v2 et une seule famille d'attaque à l'estoc, avec feintes, accel et drag. Il possède une sélection de cible individuelle, un soutien simple et l'évitement du coéquipier, mais pas encore de formation, d'ordre de capitaine, de tactique collective ni d'effectif arbitraire. Les coups de pied, les attaques de taille, la progression, le recrutement, les ligues et les tournois ne sont pas encore implémentés. Les zones ont désormais des tailles et une hauteur continues, mais il n'existe pas encore de squelette 3D complet ni d'animations des membres.
+L'interface bascule entre français et chinois traditionnel. Les vitesses disponibles sont
+`0,25×`, `0,5×`, `1×`, `2×` et `4×`.
+
+### Modes de ligne de commande
+
+```powershell
+java -cp .\out Main
+java -cp .\out Main legacy-2v2 [seed]
+java -cp .\out Main controlled-2v1
+java -cp .\out Main modern-2v2 <seed>
+java -cp .\out Main controlled-2v2 [baseline|jittered|jittered-baseline] [seed]
+java -cp .\out Main modern-3v3 <seed>
+java -cp .\out Main controlled-3v3 <seed>
+java -cp .\out Main debug-3v3-transition <seed>
+```
+
+- Sans argument, le menu permet de préparer un match amical `MODERN_2V2` ou un match
+  `MODERN_3V3`.
+- `controlled-2v1` ouvre la scène reproductible de fixation et de flank.
+- `controlled-2v2` ouvre une géométrie contrôlée ; la famille choisit le placement de départ.
+- `modern-2v2` et `modern-3v3` lancent directement le moteur moderne avec une seed imposée.
+- `legacy-2v2` conserve l'ancien moteur uniquement pour comparaison historique.
+- `debug-3v3-transition` utilise le vrai panneau Swing et enregistre quinze secondes après la
+  première mort dans `out/debug/transition-seed-<seed>.log`.
+
+### Commandes pendant un combat
+
+| Commande | Effet |
+|---|---|
+| `Espace` | pause ou reprise |
+| `R` | recommencer le match avec la même configuration |
+| `L` | basculer français/chinois traditionnel |
+| `D` | afficher ou masquer les diagnostics |
+| `0` | vitesse `0,25×` |
+| `5` | vitesse `0,5×` |
+| `1`, `2`, `4` | vitesse correspondante |
+
+Le moteur avance avec des sous-pas physiques d'au plus `1/120 s`. Modifier la vitesse d'affichage
+change donc le nombre de sous-pas exécutés, pas les règles de collision.
+
+## 2. État actuel du moteur
+
+| Domaine | État actuel |
+|---|---|
+| Duel et 2v1 | moteur physique actif et conservé |
+| 2v2 moderne | groupfight collectif actif jusqu'à la première mort |
+| 3v3 moderne | groupfight complet, puis transitions d'effectif transactionnelles |
+| Interface | menu, création d'équipes, français/chinois, vitesses et debug |
+| Joueurs morts | noyau permanent `DeathPose` 6.3.1 intégré |
+| RNG sémantique | infrastructure et audit présents, non branchés au RNG de production |
+| Validation 6.3 | isolation, smoke test et transitions validés ; tests spécialisés et batchs à venir |
+
+Avec quatre survivants, le match utilise un seul `EngagementType.GROUP_2V2`. Ce n'est ni deux duels
+indépendants, ni une orbite des quatre joueurs autour d'un centre commun. Chaque équipe possède sa
+propre `TeamManeuver` persistante. Exemple réel de la seed 41 :
+
+```text
+Bleus : COMPRESS
+Rouges : ROTATE_RIGHT
+```
+
+Après la première mort, le `GROUP_2V2` est rompu et `EngagementManager` crée le vrai
+`TWO_VS_ONE`. Sa logique `FIX/FLANK/SURVIVE`, ses doubles menaces, doubles parades, backstabs et
+sorties défensives n'ont pas été recalibrés par cette refonte.
+
+Systèmes conservés : `AttackOpportunity`, preuve figée, arbitrage d'attaque, `WeaponThreatLane`,
+revenge, contre-couverture, perception imparfaite, collisions, parades physiques, `DecisionTrace`,
+`KillExplanation`, `KillCausalChain` et déterminisme.
+
+Les résultats de batch présentés plus bas sont les résultats historiques obtenus avant le correctif
+permanent 6.3. Ils restent utiles comme référence, mais ne doivent pas être présentés comme une
+acceptation post-6.3 tant que les campagnes 100 et 500 n'ont pas été rejouées.
+
+## 3. Architecture du code
+
+- `DuelSimulation` exécute la simulation, la perception, les décisions, le mouvement et les impacts.
+- `GroupEngagement` contient les quatre Agents, les centres de chaque duo, les assignations et une
+  `TeamManeuver` bleue et rouge.
+- `TeamManeuverType`, `TeamManeuver` et `TeamManeuverAssessment` décrivent le choix tactique du duo.
+- `LocalManeuver` décrit une correction individuelle persistante.
+- `Musketeer` contient `Pos`, vitesse, angle du corps, orientation de baïonnette, état et attributs.
+- `EngagementManager` crée ou rompt `GROUP_2V2`, `DUEL` et `TWO_VS_ONE`.
+- `MapPanel` dessine l'arène et les diagnostics ; il ne décide jamais du résultat.
+- `ModernMatchMetrics` et `GroupMotionAudit` observent le moteur sans influencer l'IA.
+- `TeamFormation3`, `CoverNetwork`, `AttentionAllocation` et `TeamAttackPlan` portent les systèmes
+  collectifs propres au 3v3.
+- `RosterSnapshot`, `ActiveCombatController` et `TransitionTrace` sécurisent les changements
+  d'effectif après une élimination.
+- `DeathPose`, `DeadAgentAudit` et `DeadAgentParticipationDomain` définissent l'invariant permanent
+  des joueurs morts.
+- `SimulationRandom` reste le RNG de production. `SemanticRandomTape` et les clés sémantiques sont
+  pour l'instant des outils d'audit et de replay expérimental séparés.
+
+Les coordonnées restent regroupées dans `Pos`. Les additions, soustractions, produits scalaires et
+normalisations ne manipulent donc pas deux variables `x/y` séparées dans la logique tactique.
+
+## Guide fonctionnel complet
+
+Cette section décrit le jeu tel qu'il existe dans le code actuel. Les sections numérotées suivantes
+conservent ensuite le détail chronologique des refontes 2v2 et 3v3.
+
+### Les 14 caractéristiques d'un Agent
+
+Toutes les caractéristiques de `AgentStats` sont des entiers compris entre `1` et `100`. Une valeur
+n'est pas une probabilité directe de toucher. Elle modifie la qualité d'une perception, un délai, une
+erreur, un score de décision, une vitesse ou la probabilité de choisir une option. L'impact final reste
+soumis aux positions, angles, vitesses, collisions et états physiques.
+
+| Caractéristique | Sens dans le jeu | Effet mathématique ou algorithmique principal |
+|---|---|---|
+| Jeu de jambes | qualité du déplacement, rotation, accélération et protection du dos | intervient dans les vitesses, `backProtection`, engagement, dézonage ciblé, pression et collectif |
+| Contrôle de distance | capacité à estimer la portée et à entrer au bon moment | réduit l'erreur de distance et intervient dans engagement, pression et attention périphérique |
+| Précision | qualité de l'orientation de la pointe et de la zone visée | réduit les erreurs angulaires/verticales ; participe aux feintes et manipulations |
+| Timing attaque | choix et exécution de la fenêtre de libération | influence préparation, release, feinte, manipulation et exploitation d'une récupération |
+| Timing défense | choix de la parade et de son changement de hauteur | influence parade, Chamber et Double Block |
+| Réaction | délai entre perception d'une menace et réponse | réduit les délais de réaction ; participe à l'attention, la protection du dos et la Double Block |
+| Agressivité | préférence pour avancer et proposer le combat | change la fréquence des choix offensifs, pas leur qualité d'exécution |
+| Décision | cohérence du choix parmi les options disponibles | réduit le bruit tactique et participe à presque toutes les capacités composites |
+| Dézonage | préférence à sortir de son vis-à-vis ou changer de cible | modifie la fréquence et la durée des dézonages ; la qualité du changement dépend aussi des autres stats |
+| Chamber | aptitude et préférence à intercepter directement un stab | augmente les tentatives viables et la précision du timing, surtout au-dessus de `90` pour le parfait |
+| Double Block | spécialisation de la double parade haut/bas | fournit 50 % de la capacité composite de Double Block |
+| Pression | capacité à imposer un Hold, une feinte ou un angle de menace | fournit 50 % de la capacité composite de pression |
+| Volonté de 50/50 | préférence pour accepter un échange simultané risqué | proche de `100` : accepte souvent ; proche de `1` : refuse et privilégie la parade |
+| Collectif | volonté et qualité de couverture mutuelle | rapproche les partenaires, améliore les choix d'équipe et les manœuvres coordonnées |
+
+Capacités dérivées utilisées par le moteur :
+
+```text
+protectionDos = 0,55 × jeuJambes
+              + 0,25 × réaction
+              + 0,20 × décision
+
+attentionPériphérique = 0,45 × réaction
+                      + 0,35 × décision
+                      + 0,20 × contrôleDistance
+
+doubleBlockAbility = 0,50 × doubleBlock
+                   + 0,225 × timingDéfense
+                   + 0,15 × réaction
+                   + 0,075 × décision
+                   + 0,05 × jeuJambes
+
+changementCibleDézonage = 0,35 × décision
+                        + 0,30 × jeuJambes
+                        + 0,20 × réaction
+                        + 0,15 × contrôleDistance
+
+engagementAbility = 0,40 × jeuJambes
+                  + 0,25 × contrôleDistance
+                  + 0,25 × décision
+                  + 0,10 × réaction
+
+feintAbility = 0,40 × décision
+             + 0,35 × timingAttaque
+             + 0,25 × précision
+
+manipulationAbility = 0,35 × timingAttaque
+                    + 0,25 × précision
+                    + 0,20 × jeuJambes
+                    + 0,20 × décision
+
+pressureAbility = 0,50 × pression
+                + 0,20 × décision
+                + 0,15 × jeuJambes
+                + 0,10 × contrôleDistance
+                + 0,05 × précision
+
+teamworkAbility = 0,55 × collectif
+                + 0,25 × décision
+                + 0,15 × jeuJambes
+                + 0,05 × réaction
+```
+
+Chaque résultat est arrondi à l'entier le plus proche.
+
+### Technique, Mental, niveau global et personnalité
+
+Le profil moderne affiché dans l'interface calcule :
+
+```text
+Technique = moyenne(jeuJambes, contrôleDistance, timingAttaque, timingDéfense, chamber)
+Mental    = moyenne(précision, réaction, décision, collectif)
+
+minimumTechnique = minimum des cinq caractéristiques techniques
+pénalitéFaiblesse = 0,15 × max(0, 70 - minimumTechnique)
+
+Global = arrondi et borné entre 1 et 100 de
+         0,65 × Technique + 0,35 × Mental - pénalitéFaiblesse
+```
+
+Le classement nominal est `Low Player < 55`, `Mid Player 55–79`, `Contender 80–89` et
+`Top Player 90–100`. Deux garde-fous empêchent cependant une moyenne trompeuse :
+
+- Top Player exige Global et Technique au moins `90`, Mental au moins `85`, et chacune des cinq
+  caractéristiques techniques au moins `80` ;
+- Contender exige Global et Technique au moins `80`, Mental au moins `75`, et chacune des cinq
+  caractéristiques techniques au moins `65`.
+
+L'agressivité est classée comme personnalité : elle oriente les choix sans entrer dans Technique,
+Mental ou Global. Le profil historique `LEGACY` inclut aussi Double Block dans Technique et Pression
+dans Mental ; il n'est utilisé que par `LEGACY_2V2`.
+
+Limitation actuelle de l'éditeur : l'interface prépare bien un objet `AgentStats` de 14 valeurs, mais
+elle n'affiche et ne sauvegarde actuellement que Jeu de jambes, Contrôle de distance, Précision,
+Timing attaque, Timing défense, Réaction, Agressivité, Décision, Chamber et Collectif. Dézonage,
+Double Block, Pression et Volonté de 50/50 sont fixés à `50` lors de la validation du formulaire.
+Le moteur sait utiliser ces quatre statistiques lorsqu'elles proviennent d'une configuration Java ;
+leur édition graphique reste donc une limitation connue, pas une absence du moteur.
+
+### Tactiques de préparation
+
+| Tactique | Chamber | Attaque | Dézonage | Appât | Défense | Release | Suivi | Pression | Distance d'approche/Hold |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| Défensive | `×0,45` | `×0,45` | `×1,35` | `×0,70` | `+25` | `-10` | `-25` | `-35` | `1,95 / 1,65 m` |
+| Neutre | `×1,00` | `×1,00` | `×1,00` | `×1,00` | `0` | `0` | `0` | `0` | `1,78 / 1,45 m` |
+| Agressive | `×1,00` ou `×1,30` sur attaque lisible | `×1,80` | `×0,75` | `×1,35` | `-10` | `+15` | `+25` | `+35` | `1,55 / 1,25 m` |
+
+La tactique défensive cherche d'abord à rester vivante : parade, déplacement, recul et attente de
+faute. La tactique agressive avance davantage, maintient plus souvent une menace et tente plus de
+Chambers sur les coups lisibles. Ces multiplicateurs changent les priorités ; ils ne garantissent ni
+un blocage ni un hit.
+
+### Mouvement, orientation et perception
+
+Chaque Agent possède une `Pos`, une vitesse, une vitesse désirée, un angle du corps, une vitesse
+angulaire, un lacet de baïonnette et un angle vertical. Le recul est ralenti par un facteur `0,62` :
+un Agent qui fuit uniquement en marche arrière peut être rattrapé, tandis qu'une sortie avant-oblique
+conserve davantage de vitesse et permet de tourner autour du danger.
+
+Les Agents ne sont pas constamment face à face. Le corps peut protéger une ligne et laisser le flanc
+ou le dos exposé ; la baïonnette peut pointer à gauche ou à droite pour menacer, feinter ou transférer
+un stab. L'Agent ne lit pas directement toutes les données réelles : `OpponentAwareness` mémorise une
+position, une vitesse, une orientation et un état observés avec confiance, erreur et ancienneté. En
+3v3, `AttentionAllocation` sépare menace primaire, secondaire et périphérique. Voir un adversaire ne
+provoque donc jamais automatiquement `target = adversaire`.
+
+### Cycle d'attaque et Hold sans durée maximale
+
+Le cycle normal est :
+
+```text
+NEUTRAL
+→ ATTACK_PREPARE
+→ ATTACK_HOLD facultatif
+→ ATTACK_ACTIVE
+→ RECOVERY
+→ NEUTRAL
+```
+
+`ATTACK_PREPARE` peut passer directement à l'attaque : c'est plus rapide, mais la décision est plus
+risquée et peut produire un stab mal préparé. Si l'Agent entre en `ATTACK_HOLD`, il peut conserver la
+pointe armée sans limite automatique tout en avançant, orbitant ou dézonant. Le Hold ne prend fin que
+par une décision explicite : libération, réalignement, feinte, parade, changement de garde, stab
+volontairement imparfait ou abandon. Un échec entre en récupération ; un coup bloqué place l'attaquant
+en `BLOCK_STUN` pendant `0,30 s`.
+
+Les timings de base sont :
+
+| Direction | Portée de thrust | Préparation | Actif | Récupération |
+|---|---:|---:|---:|---:|
+| Haute | `1,52 m` | `0,36 s` | `0,15 s` | `0,48 s` |
+| Basse | `1,30 m` | `0,22 s` | `0,09 s` | `0,34 s` |
+
+Le haut porte plus loin mais est plus lent. Le bas est plus court et plus rapide. L'angle vertical
+applique à chaque timing :
+
+```text
+facteurTiming = 1 + 0,35 × clamp(angleVertical / 35°, -1, 1)
+```
+
+Pointer vers le sol rend donc le stab plus rapide ; pointer vers le ciel l'allonge. La portée projetée
+est aussi réduite par le cosinus de cet angle. L'attaque n'est jamais un simple tirage de réussite :
+pendant la phase active, le segment balayé par la pointe doit réellement entrer dans le rayon du corps
+adverse.
+
+### Attaques haute/basse, parades et zones corporelles
+
+Une attaque haute se lit en orange avec `↑`; une attaque basse se lit en cyan avec `↓`. La baïonnette
+devient jaune pendant l'attaque et cyan pendant la parade. Une parade doit avoir la bonne hauteur,
+être orientée vers la menace et être active au moment du contact. Un Agent en parade ne peut pas
+attaquer simultanément, mais il peut se déplacer pour sortir de la pression.
+
+Les zones verticales sont :
+
+| Zone | Hauteur | Conséquence normale |
+|---|---:|---|
+| Jambes | `0,00–0,65 m` | `40` dégâts ; souvent une erreur de longueur ou de visée |
+| Torse | `0,65–1,50 m` | grande cible ; `95 %` de 100 dégâts, sinon `50` |
+| Tête | `1,50–1,80 m` | petite cible ; `100` dégâts |
+
+Un clean backstab, une punition d'appât ou un Chamber parfait inflige `100` dégâts. Un Agent meurt à
+zéro point de vie. La taille des zones n'est pas transformée en pourcentage abstrait : c'est la hauteur
+réelle de la pointe au contact qui choisit la zone.
+
+### Chamber simple et Chamber parfait
+
+Le Chamber intercepte un stab avec une attaque de même direction au lieu d'une parade classique :
+
+```text
+CHAMBER_PREPARE → CHAMBER_HOLD → CHAMBER_ACTIVE
+```
+
+Le Chamber simple utilise une fenêtre de timing de `0,025 s`. Son retour peut être bloqué ou repris
+par un autre Chamber ; il est rarement létal automatiquement, car la position et le jeu de jambes
+déterminent encore la zone touchée. Les chaînes subissent une pénalité croissante pour éviter des
+dizaines de Chambers garantis.
+
+Le Chamber parfait utilise une fenêtre de `0,004 s` et exige une statistique Chamber strictement
+supérieure à `90`. Il est très rare et létal s'il entre réellement en collision. La statistique ne
+force pas son usage : elle augmente la capacité à reconnaître et exécuter la fenêtre.
+
+### Appât, feinte et erreur de distance
+
+L'appât déforme volontairement la lecture de distance ou présente une ouverture. Un adversaire qui
+tombe dans le piège libère trop tôt, rate physiquement puis ne peut plus bloquer pendant sa récupération.
+L'appâteur peut alors punir. Toutefois, Décision, Jeu de jambes et Agressivité peuvent pousser la cible
+à avancer suffisamment avant de frapper ; l'appâteur doit alors réussir sa défense selon Timing défense
+et Réaction.
+
+Une feinte change l'information donnée à l'adversaire : changement de hauteur, passage vers la parade
+ou maintien de pression. Elle ne téléporte pas l'arme et ne supprime pas les temps physiques. Après des
+corrections infructueuses, le Hold choisit explicitement entre réalignement, abandon et libération
+imparfaite ; aucun timer caché ne force le stab.
+
+### Dézonage et changement de cible
+
+Dézoner signifie sortir de son duel local, pas simplement reculer. Les variantes comprennent recul,
+sortie avant-gauche/droite, orbite, transfert vers un autre adversaire et abandon du transfert. Un
+Agent peut dézoner en Hold ou en parade. La statistique Dézonage règle sa préférence ; la réussite du
+changement de cible utilise surtout Décision, Jeu de jambes, Réaction et Contrôle de distance.
+
+À longue distance, un Agent doit rester en état d'alerte et revenir vers une menace utile. En combat
+collectif, il peut quitter son vis-à-vis pour aider un partenaire ou créer temporairement un 2v1.
+
+### Dos, flancs et backstab
+
+Une parade ne couvre jamais l'arrière. L'Agent doit tourner son corps, se déplacer ou rejoindre son
+équipe. La protection du dos dépend principalement du Jeu de jambes, puis de la Réaction et de la
+Décision. Regarder derrière soi expose naturellement la ligne avant ; en 2v2/3v3, l'Agent arbitre donc
+entre plusieurs menaces.
+
+Une cible parfaitement de dos et physiquement à portée constitue une forte occasion de backstab, mais
+pas un kill abstrait garanti : un attaquant faible peut mal estimer la distance, viser à côté ou toucher
+les jambes. Une menace latérale éloignée peut aussi rester périphérique et être comprise trop tard.
+
+### Pression, 50/50, 2v1 et Double Block
+
+Un Agent en Hold est offensif mais vulnérable ; un Agent en parade est temporairement inoffensif mais
+survit si sa garde correspond. La pression cherche à maintenir cet avantage de timing par la distance,
+l'angle, le déplacement, la pointe et les feintes. La cible pressée n'est pas paralysée : elle choisit
+notamment `PRESSURE_ESCAPE_LEFT`, `PRESSURE_ESCAPE_RIGHT`, `PRESSURE_JOIN_TEAM` ou le recul. Reculer
+peut cependant ouvrir son flanc au second adversaire.
+
+Le `50/50` est la volonté de lancer presque en même temps que l'adversaire. La statistique correspondante
+ne rend pas le coup meilleur : elle ne fait qu'accepter ou refuser plus souvent ce risque. Un Agent qui
+refuse privilégie la parade lorsqu'il lit le départ adverse.
+
+En 2v1, les deux attaquants cherchent à fixer, flanker, tenir une pointe et feinter pour provoquer une
+réponse. Une attaque haute et une attaque basse presque simultanées imposent une `DOUBLE_BLOCK`. Sa
+réussite utilise la capacité composite donnée plus haut, puis la géométrie et la fenêtre réelle. Le
+défenseur peut aussi chercher une sortie, un timing de spam ou rejoindre un allié avant l'encerclement.
+
+### Collectif 2v2 et groupfight 3v3
+
+Le Collectif ne crée pas une chorégraphie rigide. Les partenaires cherchent une distance de soutien,
+protègent les lignes de punition et tournent ensemble quand leurs déplacements individuels convergent.
+Une rotation visible est le résultat des quatre ou six joueurs qui cherchent une meilleure ligne,
+évitent les pointes et conservent leur couverture ; ce n'est pas une action globale imposée à tous.
+
+Le 2v2 moderne reste un `GROUP_2V2` jusqu'à la première mort, puis devient un vrai `TWO_VS_ONE`. Le
+3v3 utilise `GROUP_3V3`, `GROUP_3V2` ou `GROUP_3V1` tant qu'une équipe conserve trois joueurs, puis
+transmet le combat aux moteurs validés `GROUP_2V2`, `TWO_VS_ONE` ou `DUEL` selon l'effectif.
+
+## 4. `TeamManeuver` persistante
+
+Types disponibles :
+
+```text
+HOLD_LINE
+ROTATE_LEFT / ROTATE_RIGHT
+PRESS_FORWARD / GIVE_GROUND
+SHIFT_LEFT / SHIFT_RIGHT
+COMPRESS / EXPAND
+CROSS_COVER
+RECOVER_FORMATION
+```
+
+Chaque manœuvre mémorise l'équipe, le début, trois durées, les centres de départ, la direction, la
+confiance, la raison et les joueurs intérieur/extérieur. Les deux équipes évaluent et choisissent
+indépendamment ; une équipe n'hérite jamais du vecteur choisi par l'autre.
+
+Pour une qualité collective normalisée `q` calculée à partir de décision et collectif :
+
+```text
+durée minimale  = 0,70 + 0,40q seconde
+durée préférée  = 1,40 + 1,10q seconde
+durée maximale  = 3,00 + 1,00q secondes
+```
+
+Avant la durée minimale, la manœuvre persiste sauf vraie urgence. Après la durée préférée, elle peut
+être réévaluée. Après la durée maximale, répéter exactement le même choix reçoit une pénalité afin
+d'éviter une boucle éternelle.
+
+Les évaluations utilisent couverture `C`, espace latéral `L`, sécurité du bord `B`, qualité de
+formation `F`, potentiel de ligne `A`, menace, pression avant et bonus propre au type :
+
+```text
+score commun = 0,20C + 0,18L + 0,14B + 0,16F + 0,14A
+score final  = score commun + bonus géométrique du type + bruit de décision borné
+```
+
+Le bruit diminue quand décision et collectif augmentent. Le choix final est tiré parmi les options
+proches de la meilleure : fenêtre `0,10 + 0,18(1-q)`, pondération exponentielle de température
+`0,10`. Un bon duo est donc cohérent sans être parfaitement déterministe ; un duo faible explore
+plus souvent une option seulement acceptable. La seed rend toutefois chaque replay reproductible.
+
+Interruptions immédiates : échange d'attaque, revenge, contre-couverture, stun, bord imminent,
+séparation grave, ennemi entre les partenaires, mort ou entrée en `TWO_VS_ONE`. Une urgence de forme
+devient `COMPRESS` ou `RECOVER_FORMATION` au lieu de recréer la même manœuvre à chaque frame.
+
+## 5. Rotation propre au duo
+
+La rotation utilise :
+
+```text
+teamCenter     = moyenne des deux partenaires vivants
+enemyCenter    = moyenne des deux adversaires vivants
+forward        = normalisé(enemyCenter - teamCenter)
+lateral        = perpendiculaire(forward) × direction de la manœuvre
+```
+
+Elle n'utilise pas le centre des quatre joueurs pour propulser les Agents. Le rôle intérieur est le
+joueur le plus proche du centre du groupfight ; en cas d'égalité, la position dans le sens du virage
+décide. Les rôles persistent pendant la manœuvre afin de ne pas alterner à chaque frame.
+
+Références avant accélération et contraintes :
+
+```text
+extérieur : 0,76 m/s latéral + 0,12 m/s avant
+intérieur : 0,37 m/s latéral + 0,15 m/s avant
+facteur de jeu de jambes = 0,82 + 0,002 × footwork
+```
+
+Hors urgence, la projection demandée est maintenue vers environ `0,62 m/s` pour l'extérieur et
+`0,42 m/s` pour l'intérieur. Ce ne sont pas des téléportations : accélération, inertie, recul ralenti,
+collision, bord et état physique restent appliqués. Sur 500 seeds, la différence tangentielle réelle
+extérieur moins intérieur vaut `+0,135 m/s` hors urgence.
+
+Les autres vecteurs de duo sont également physiques : pression avant oblique, recul oblique,
+translation latérale, rapprochement/écartement des partenaires, couverture croisée ou retour vers
+la position de couverture.
+
+## 6. Composition du mouvement et priorités
+
+`modernGroupVelocity()` compose explicitement :
+
+```text
+teamManeuverVelocity
+localManeuverVelocity
+formationVelocity + partnerVelocity
+weaponAvoidanceVelocity
+collisionVelocity
+boundaryVelocity
+```
+
+Une correction locale ordinaire est multipliée par `0,58`; une vraie sortie de ligne de pointe garde
+sa pleine force. La hiérarchie pratique est :
+
+```text
+bord/collision imminente
+→ attaque physiquement imminente
+→ parade, revenge, contre-couverture
+→ évitement de pointe
+→ correction locale
+→ manœuvre d'équipe
+→ garde-fou de formation
+```
+
+`LocalManeuver` n'a donc pas disparu. Un Agent peut éviter une pointe pendant que son partenaire
+continue `ROTATE_RIGHT`. `HOLD_POSITION` est un vrai arrêt de `0,18–0,42 s` : la propulsion commune
+est suspendue pour cet Agent, sauf si une pointe, une collision ou le bord impose une sortie. Le
+batch final sépare `13,233 s` de Holds intentionnels et `14,783 s` de faible vitesse incidente.
+
+## 7. Attaque, parade et collision
+
+Une attaque suit toujours préparation, Hold éventuel, phase active et récupération. Le Hold peut
+durer tant qu'aucune autre action de baïonnette ne l'annule. Haut et bas ont des portées et timings
+différents ; l'angle vertical et le lacet gauche/droite modifient la géométrie réelle.
+
+Un impact exige le balayage réel de la pointe dans une zone corporelle. La tête est petite, le torse
+large et les jambes correspondent souvent à un coup trop long ou mal ciblé. Une parade exige le bon
+état, la bonne direction et l'intersection physique. Un stab arrière ne peut pas être bloqué vers
+l'arrière ; perception périphérique, réaction, décision, déplacement et dézonage déterminent si
+l'Agent protège son dos à temps.
+
+La restauration du mouvement n'accorde aucun bonus d'attaque. Tout stab ordinaire du groupfight
+passe encore par `assessAttackOpportunity()` puis `TeamAttackArbitration`. Aucun seuil de portée,
+temps de préparation ou délai automatique n'a été assoupli.
+
+## 8. Opportunités et explications
+
+`AttackOpportunity` contient raison, fenêtre, ETA d'impact, ligne alliée, couverture adverse, risque
+de revenge, score et rejet. `AttackOpportunityEvidence` fige au commit les angles observés, état,
+temps restant, corridor de pointe, vitesse d'entrée, couverture et confiance. La catégorie
+`TARGET_MOVING_INTO_LINE` exige une vraie traversée prédite ; elle n'est pas inventée en l'absence de
+preuve.
+
+`DecisionTrace` distingue désormais `TEAM_MANEUVER` et `LOCAL_MOVEMENT`. Le debug affiche la
+manœuvre de chaque équipe, le rôle intérieur/extérieur, son âge et sa contribution. Une chaîne de
+mort contient séparément :
+
+```text
+TeamManeuver
+→ mouvement local
+→ décision d'attaque
+→ réaction de la victime
+→ décision de couverture alliée
+→ résolution physique
+```
+
+Une donnée absente est écrite `NONE_OBSERVED`; elle n'est jamais reconstruite après l'impact.
+
+## 9. Validation visuelle
+
+```powershell
+java -cp .\out VisualValidationCapture 41 73 119
+java -cp .\out VisualValidationCapture --representative
+```
+
+Chaque dossier `out/visual-validation/seed-N/` contient :
+
+- `contact-sheet.png` : 16 instants à vitesse 1× ;
+- `trajectories.png` : trajectoires jusqu'à la première mort ;
+- `timeline.txt` : `TeamManeuver`, rôles, durées, raisons et `LocalManeuver` ;
+- `decisions.txt` : opportunités et preuves ;
+- `first-kill.txt` : explication et chaîne causale ;
+- `motion.txt` et `suspicions.txt` : audit du mouvement.
+
+La version fade précédente mesurait environ `8,2 %` de biais collectif et `61,4 %` de micro-mouvement.
+La version hybride finale mesure `39,8 %` de contribution de duo, `27,9 %` locale, `19,9 %` de
+formation et `12,2 %` de collision/bord. Les captures 41/73/119 ont été régénérées après calibration.
+
+## 10. Résultats du batch final
+
+> Référence historique pré-6.3. Ces chiffres décrivent la version validée avant la neutralisation
+> permanente des morts. Ils devront être remplacés par les campagnes post-6.3 du jalon 6.3.4.
+
+Commande :
+
+```powershell
+java -cp .\out FinalAcceptanceTest 500
+```
+
+Résultat final :
+
+```text
+500/500 matchs terminés
+0 timeout, stalemate, thrashing, sortie d'arène ou position invalide
+0 activation de l'ancien système
+0 échec déterministe
+500/500 premières morts avec KillCausalChain
+
+TeamManeuver démarrées : 4052
+ROTATE_LEFT / RIGHT : 1117 / 1162
+PRESS_FORWARD / GIVE_GROUND : 519 / 23
+COMPRESS / EXPAND : 345 / 90
+CROSS_COVER / RECOVER_FORMATION : 14 / 768
+distance latérale cumulée : 3556,485 m
+variation de surface : 5194,712
+
+premières morts : 415 normales, 84 revenge, 1 chamber
+revenge : 1005 occasions, 104 commits, 84 kills
+post-élimination TWO_VS_ONE : 500/500
+```
+
+## 11. Tests utiles
+
+```powershell
+java -cp .\out TeamManeuverTest
+java -cp .\out ModernGeometryTest
+java -cp .\out ModernGroup2v2Test
+java -cp .\out TwoVsOneCoordinationTest
+java -cp .\out AttackOpportunityTest
+java -cp .\out DecisionExplanationTest
+java -cp .\out AttributeBehaviorAudit
+java -cp .\out FinalAcceptanceTest 500
+```
+
+`TeamManeuverTest` couvre rotations visibles, rotations opposées, pression, Hold individuel,
+priorité de pointe, shift, compression, expansion, dynamisme sur cinq secondes et déterminisme.
+
+## 12. Note sur l'ancien moteur
+
+`LEGACY_2V2` reste compilable à titre historique. Les champs globaux `GroupPhase.ROTATE`, vitesse
+angulaire et direction historique subsistent dans certains diagnostics de compatibilité, mais ils ne
+propulsent plus `modernGroupVelocity()`. Ils ne doivent pas être réactivés pour régler le match
+amical moderne.
+
+## 13. Jalon expérimental 3v3 — mouvement collectif
+
+Le 3v3 possède un chemin séparé, sélectionnable depuis le menu et en ligne de commande :
+
+```powershell
+java -cp .\out Main modern-3v3 41
+java -cp .\out Main controlled-3v3 41
+```
+
+`TeamConfiguration3` transporte le nom de l'équipe et ses trois configurations. L'écran de
+préparation réutilise exactement le même éditeur d'attributs que le 2v2, mais affiche trois fiches
+par équipe. `DuelSimulation` crée ensuite six `Musketeer` et un seul `GROUP_3V3`. Il ne crée pas
+trois `DUEL` invisibles et ne réutilise pas le ciblage 2v2 comme structure collective.
+
+### Formation géométrique
+
+Chaque équipe possède une instance de `TeamFormation3`. À chaque tick, elle calcule :
+
+- le centre moyen des trois joueurs avec des opérations `Pos` ;
+- l'axe `forward`, dirigé vers le centre adverse ;
+- l'axe `lateral`, perpendiculaire à `forward` ;
+- la largeur, la profondeur et la cohésion de la formation ;
+- les rôles `LEFT`, `CENTER`, `RIGHT`, obtenus en projetant les positions sur `lateral`.
+
+Les rôles sont donc des observations géométriques, pas des numéros attribués définitivement au
+spawn. Un croisement réel peut échanger deux rôles. Une durée minimale de `0,55–0,90 s`, modulée
+par décision et collectif, et une marge spatiale de `0,30 m` empêchent les échanges de rôle à
+chaque micro-croisement.
+
+### Manœuvres indépendantes et rotation
+
+Les deux équipes choisissent leur propre `TeamManeuver` persistante parmi les types déjà employés
+par le moteur moderne : rotation, pression, recul, décalage, compression, expansion, couverture
+croisée et récupération. Une rotation n'applique pas la même vitesse aux trois joueurs : la
+consigne tangentielle est `0,84 m/s` pour l'extérieur, `0,56 m/s` pour le centre et `0,28 m/s`
+pour l'intérieur, avant l'effet du jeu de jambes, de l'inertie, de la correction de formation,
+des collisions et du bord. Cette différence forme une courbe collective lisible sans téléporter
+les joueurs ni les attacher à une orbite rigide.
+
+Au jalon 1, `updateExperimental3v3()` ne passe volontairement jamais dans la sélection d'attaque,
+la parade ou la résolution des impacts. Tous les Agents restent `NEUTRAL / WAIT` avec 100 points de
+vie. Ce verrou sert à valider d'abord la géométrie et le mouvement. Les attaques, les morts et les
+transitions vers 2v2/2v1 appartiennent aux jalons
+suivants ; ils ne sont pas présentés ici comme terminés.
+
+### Tests et captures du jalon 1
+
+```powershell
+java -cp .\out Experimental3v3Test
+java -cp .\out VisualValidation3v3Capture
+```
+
+`Experimental3v3Test` vérifie l'unique `GROUP_3V3`, l'absence totale d'attaque, les rôles
+géométriques, l'hystérésis, les manœuvres indépendantes, l'ordre de vitesse extérieur/centre/
+intérieur et le déterminisme. Les tests `Modern2v2Test`, `TeamManeuverTest` et
+`ModernGroup2v2Test` sont aussi exécutés comme non-régression.
+
+Pour les seeds 41, 73 et 119, `out/visual-validation-3v3/seed-N/` contient
+`contact-sheet.png`, `trajectories.png` et `formations.txt`. La feuille montre seize instants espacés
+de `1 s`; le fichier texte conserve les rôles, dimensions, cohésion et manœuvre des deux équipes.
+
+## 14. Jalon expérimental 3v3 — attention limitée
+
+Le jalon 2 ajoute une `AttentionAllocation` par Agent sans modifier `MultiThreatAttention`, qui reste
+utilisée par le `TWO_VS_ONE`. Cette séparation empêche la nouvelle perception à trois de recalibrer
+le moteur 2v2.
+
+Chaque allocation contient trois adversaires distincts :
+
+```text
+primaryThreat      poids habituel 0,50–0,66
+secondaryThreat    part restante principale
+peripheralThreat   poids habituel 0,10–0,17
+```
+
+Les trois poids sont recalculés et normalisés à exactement `1`. Ils ne représentent pas une chance
+de toucher : ils distribuent la fréquence et la précision de l'observation. La saillance d'une
+menace dépend de la distance, de sa position dans le champ visuel, de sa vitesse de rapprochement,
+d'une attaque évidente et d'un danger arrière très proche.
+
+### Changement de menace principale
+
+Le meilleur score ne provoque jamais directement `target = nouvelAdversaire`. Une menace ordinaire
+doit dépasser la menace actuelle d'au moins `0,16` après un verrou de `0,55–0,90 s`. Elle devient
+d'abord `pendingPrimary`. La réorientation dure ensuite environ `0,14–0,38 s` selon Réaction et
+Décision. Un stab imminent à courte portée autorise un délai urgent de `0,08 s`, mais pas un échange
+instantané. Après la bascule, `precisionPenaltyUntil` maintient une courte incertitude sur la nouvelle
+cible. La menace secondaire possède sa propre hystérésis de `0,42 s` et une marge de `0,14`.
+
+### Qualité de perception
+
+`OpponentAwareness` conserve désormais le niveau d'attention, le cooldown d'observation, la
+confiance détaillée, l'heure et le nombre d'observations. Les cadences indicatives sont :
+
+```text
+primaire     0,075–0,125 s
+secondaire   0,17–0,29 s
+périphérique 0,42–0,72 s
+```
+
+La mesure principale actualise position, vitesse, corps, pointe et état avec une faible erreur. La
+mesure secondaire est plus bruitée et ne lit l'état que si l'action est évidente ou si la lecture
+réussit. La périphérie produit surtout une dernière position, une vitesse approximative et une
+alerte : `stateDetailFresh` reste faux et l'état exact d'attaque/parade n'est jamais copié. La marge
+d'erreur de position vaut environ `1×`, `2,25×` et `4,60×` l'erreur de base suivant les trois niveaux.
+
+Le mouvement regarde la menace principale terminée, pas `pendingPrimary`. Une simple détection ne
+change donc ni la cible ni la direction du corps avant la fin du coût de réorientation.
+
+### Debug, métriques et tests
+
+La touche `D` affiche pour chaque Agent `P`, `S`, `R`, les poids et la bascule en attente. Les fiches
+compactes montrent aussi les trois associations. `Group3v3Metrics` compte les changements primaires
+retardés et terminés, les changements secondaires, les détections périphériques et les poids moyens.
+
+```powershell
+java -cp .\out Experimental3v3AttentionTest
+java -cp .\out VisualValidation3v3Capture
+```
+
+Les tests A–E contrôlent la normalisation, les trois cadences, la confiance décroissante, le délai
+de bascule, l'absence de lecture exacte périphérique et le déterminisme. Chaque dossier de capture
+contient maintenant `attention.txt`, en plus des images et de `formations.txt`. À ce jalon précis,
+les attaques n'étaient pas encore activées.
+
+## 15. Jalon expérimental 3v3 — réseau physique de couverture
+
+Le jalon 3 crée un `CoverNetwork` séparé pour chaque équipe. Il ne réutilise ni ne modifie le
+`CoverAssessment` du 2v2. Pour trois protecteurs, deux alliés possibles et trois ennemis, le moteur
+évalue exactement `3 × 2 × 3 = 18` relations par équipe et par mise à jour :
+
+```text
+protecteur → allié protégé / ennemi menaçant
+```
+
+Un `CoverLink` conserve les participants, la viabilité, les ETA d'alignement, préparation et contact,
+l'ETA totale de punition, la sécurité de ligne, la confiance perceptive, la qualité et une raison de
+refus explicite. Le réseau indexe ces liens par allié protégé (`incomingLinks`) et par protecteur
+(`outgoingLinks`).
+
+### Calcul physique d'un lien
+
+Le calcul utilise `OpponentAwareness.lastKnown`, jamais la position réelle cachée d'un ennemi non
+observé. Sans visibilité ni mémoire, le lien vaut `enemy_untracked`.
+
+```text
+alignEta   = erreur angulaire de la pointe / vitesse de rotation estimée
+prepareEta = préparation restante de la baïonnette
+contactEta = distance restant hors portée / vitesse de déplacement estimée
+punishEta  = alignEta + prepareEta + contactEta
+```
+
+L'ETA de menace adverse applique le même principe à la dernière position, pointe, portée et état
+connus. `lineSafety` mesure la distance minimale des alliés au segment protecteur–ennemi. La qualité
+est ensuite :
+
+```text
+quality = 0,38 × marge temporelle
+        + 0,23 × sécurité de ligne
+        + 0,20 × confiance perceptive
+        + 0,07 × proximité de l'ennemi
+        + 0,12 × portée de soutien vers l'allié
+        + 0,08 × qualité mentale du protecteur
+```
+
+Le lien est refusé si la perception est trop incertaine, si un allié bloque la ligne, si l'allié est
+à plus de `2,85 m`, si la punition arrive plus de `0,42 s` après la menace ou si la qualité reste sous
+`0,34`. Une séparation visible n'est donc pas automatiquement une rupture : la ligne et les ETA
+doivent réellement cesser d'être crédibles.
+
+### Mesures du réseau
+
+```text
+connectivity = liens viables / 18
+couverture d'un membre = moyenne, pour les trois ennemis,
+                        du meilleur lien viable reçu
+weakestMemberCoverage = plus petite couverture individuelle
+```
+
+Une aile éloignée peut perdre ses liens entrants tandis que l'autre aile les conserve. Le centre
+obtient souvent davantage de liens sortants uniquement parce que sa géométrie lui permet de joindre
+les deux ailes ; aucun bonus caché ne lui est accordé.
+
+Le réseau influence la prochaine sélection de `TeamManeuver` : couverture minimale sous `0,10` →
+`RECOVER_FORMATION`, connectivité sous `0,16` → `COMPRESS`. Il ajoute aussi une faible correction vers
+le centre pour un membre découvert et vers l'aile faible pour le joueur central. Pendant une rotation,
+cette correction est multipliée par `0,18`, afin de ne pas effacer la différence de vitesse
+extérieur/centre/intérieur validée au jalon 1.
+
+### Debug, métriques et validation
+
+Avec `D`, la carte affiche les meilleurs liens viables seulement, et non les 36 évaluations. Le texte
+indique liens actifs, connectivité, membre faible et couverture. `Group3v3Metrics` compte créations,
+ruptures, membres sans couverture, liens du centre/des ailes et moyennes du réseau.
+
+```powershell
+java -cp .\out Experimental3v3CoverNetworkTest
+java -cp .\out VisualValidation3v3Capture
+```
+
+Les tests A–E vérifient les 18 relations, les liens physiques viables, la rupture locale d'une aile,
+la conservation de l'autre côté, l'influence sur la prochaine manœuvre, la confiance issue de
+l'attention et le déterminisme. Les captures contiennent maintenant `cover-network.txt`. Ce test
+isolé conserve les attaques désactivées afin de mesurer le réseau sans interférence.
+
+## 16. Jalon expérimental 3v3 — plans d'attaque et impacts
+
+Le jalon 4 active les attaques dans `MODERN_3V3` et `CONTROLLED_3V3`. Le choix collectif est séparé
+de `TeamAttackArbitration` du 2v2. Une équipe produit maintenant un `TeamAttackPlan` contenant zéro,
+un ou deux attaquants, leurs `AttackOpportunity`, les membres qui restent en couverture, la sécurité
+combinée des lignes et le risque de récupération.
+
+### Opportunités perçues et couvreurs multiples
+
+Un Agent évalue seulement ses menaces primaire et secondaire. Une menace périphérique est refusée
+avec `LOW_CONFIDENCE_PERCEPTION`, même si le moteur connaît son objet Java. Il faut une position
+mémorisée, une confiance suffisante, une distance physique compatible avec la portée et une pointe
+alignable.
+
+`OpposingCoverSummary` filtre le `CoverNetwork` de la cible avec deux contraintes : le lien doit être
+viable et son protecteur doit être connu de l'attaquant. Il conserve :
+
+```text
+meilleur couvreur et fastestPunishEta
+secondPunishEta
+nombre de couvreurs crédibles
+combinedRisk borné entre 0 et 1
+```
+
+Le risque principal compare `fastestPunishEta` avec l'impact plus la récupération de l'attaquant. Le
+deuxième couvreur ajoute au maximum `35 %` de son risque : les menaces ne sont donc pas additionnées
+magiquement. La couverture propre de l'attaquant réduit ensuite le risque final jusqu'à `42 %`.
+
+Une opportunité ordinaire est refusée si la cible est hors portée, si un allié coupe la ligne, si la
+confiance est sous `0,32`, si l'erreur d'arme dépasse `48°`, si la meilleure punition adverse est trop
+rapide, si la fenêtre se ferme avant l'impact ou si le score de décision est insuffisant.
+
+### Arbitrage zéro, un ou deux attaquants
+
+Le plan trie la meilleure occasion de chaque Agent. Le premier attaquant viable peut être retenu. Un
+deuxième n'est autorisé que si :
+
+- il vise un adversaire différent ;
+- les deux segments de stab ne se croisent pas dangereusement ;
+- le troisième partenaire reste hors des deux attaques ;
+- ce troisième partenaire possède encore au moins un `CoverLink` viable.
+
+Le troisième attaquant n'est jamais ajouté. `tripleAttackerPlans` reste donc exactement à zéro et
+`tripleAttackRejections` enregistre les situations où trois occasions existaient. Après un plan, un
+cooldown dépendant de l'agressivité évite une réévaluation à chaque tick.
+
+### Préparation, défense et résolution physique
+
+Les attaquants passent réellement par `ATTACK_PREPARE → ATTACK_ACTIVE → RECOVERY`. Le plan force une
+libération directe, mais `ordinaryDirectTargetEscaped()` peut encore transformer l'action en Hold si
+la cible sort de portée avant le départ.
+
+Le défenseur ne lit pas l'attaque réelle. Il réagit à son `OpponentAwareness` :
+
+```text
+délai de base = 0,36 - 0,0024 × Réaction
++ 0,00 s si menace primaire
++ 0,09 s si secondaire
++ 0,22 s si périphérique
++ 0,10 s si la direction exacte n'est pas fraîche
+```
+
+Après ce délai, `BLOCK_PREPARE` utilise encore le timing défensif et peut choisir une mauvaise hauteur.
+La parade réussit uniquement lorsque la direction correspond, que le défenseur fait face à la ligne
+et que la pointe entre réellement en collision. Une parade place l'attaquant en `BLOCK_STUN`. Un raté
+entre en `RECOVERY`, dont le mouvement ajoute `0,38 m/s` loin de la cible, conformément au recul de
+récupération déjà établi.
+
+Les dommages continuent d'utiliser `resolveAttack()`, la pointe balayée, les zones corporelles et
+`checkHit()`. Aucune réussite n'est tirée directement depuis le score du plan.
+
+### Limite volontaire du jalon
+
+Cette limite décrivait le jalon 4 : il s'arrêtait à la première élimination pour éviter un faux 3v2
+ou trois duels. Depuis le jalon 6, le moteur reconstruit explicitement `GROUP_3V2`/`GROUP_3V1`, puis
+rend le contrôle aux moteurs 2v2, 2v1 ou 1v1 quand leurs effectifs sont atteints. La première mort
+conserve toujours sa cause physique, son meilleur allié de couverture et sa chaîne causale.
+
+### Tests et captures
+
+```powershell
+java -cp .\out Experimental3v3AttackPlanTest
+java -cp .\out VisualValidation3v3Capture
+```
+
+Les tests A–E vérifient le résumé des couvreurs perçus, l'existence d'un double plan sûr, le refus
+systématique du troisième attaquant, les hits/parades/éliminations physiques, le recul de récupération
+et le déterminisme. Les seeds 41, 73 et 119 produisent désormais `attacks.txt` et `first-kill.txt` ;
+les quinze premières cases du contact sheet sont espacées de `1 s`. La capture continue ensuite
+jusqu'à trente secondes si nécessaire pour obtenir une première mort explicable, puis remplace la
+dernière case par l'état exact de cette élimination.
+
+## 17. Jalon expérimental 3v3 — revenge et contre-couverture
+
+Le jalon 5 généralise la punition après parade ou stab raté sans réutiliser l'arbitrage du
+`MODERN_2V2`. Un échange 3v3 est volontairement borné : une attaque initiale peut produire un seul
+revenger principal et un seul contre-couvreur principal. Une parade ou un raté de ces deux actions
+termine l'échange ; il ne crée jamais une chaîne récursive de revenges.
+
+### Classement des candidats au revenge
+
+Les deux partenaires de la victime potentielle sont évalués séparément sous forme de
+`TeamRevengeCandidate`. Le candidat ne peut pas lire directement l'attaquant : celui-ci doit être une
+menace primaire ou secondaire connue avec une confiance d'au moins `0,24`. Une menace périphérique
+reste trop imprécise pour déclencher cette punition.
+
+```text
+impactEta = temps d'alignement perçu
+          + temps de préparation restant
+          + temps pour entrer à portée
+
+vulnerability = BLOCK_STUN restant + récupération
+             ou RECOVERY restante
+             ou récupération normale après le raté
+```
+
+La ligne est contrôlée contre les deux alliés. Le moteur compte aussi les `CoverLink` viables qui
+resteraient utilisables sans le candidat : un Agent ne gagne donc pas automatiquement parce qu'il est
+le plus proche s'il détruit toute la couverture de son équipe.
+
+```text
+score = 0,36 × avantage temporel
+      + 0,20 × sécurité de ligne
+      + 0,17 × compétence technique/collective
+      + 0,12 × couverture préservée
+      + 0,15 × sécurité face à la contre-couverture
+```
+
+Le candidat est refusé s'il est occupé, en récupération, étourdi, trop loin, mal informé, bloqué par
+un allié, trop lent pour la fenêtre ou insuffisamment sûr. Seul le meilleur candidat viable devient
+`COMMIT_REVENGE`; l'autre conserve ses liens et son mouvement de couverture.
+
+### Un seul contre-couvreur principal
+
+Après le choix du revenger, les deux partenaires de l'attaquant vulnérable sont évalués. Le moteur
+utilise leur perception du revenger, leur ETA d'alignement/préparation/contact, la sécurité de leur
+ligne et leurs attributs Décision/Collectif. Le meilleur candidat viable devient
+`COUNTER_COVER`, prépare son arme en Hold et ne relâche que lorsque le revenger engage réellement et
+entre dans sa ligne physique.
+
+Cette menace n'annule pas magiquement le revenge. Son ETA entre déjà dans le score du revenger ; le
+contre-couvreur doit ensuite orienter sa baïonnette, atteindre la portée et réussir la collision. Les
+autres Agents ne sont ni synchronisés ni convertis en attaquants supplémentaires.
+
+### Résolution, debug et métriques
+
+Les coups de revenge et de contre-couverture utilisent les états, parades, zones corporelles et
+collisions ordinaires. Les métriques distinguent candidats, occasions, engagements, refus,
+annulations, parades, ratés, hits et kills pour les deux rôles. `preventedRevengeChains` prouve qu'une
+action secondaire bloquée ou ratée ferme l'échange au lieu d'en engendrer un nouveau.
+
+Avec `D`, l'interface affiche le revenger, sa cible, les liens préservés, le risque de contre-couverture,
+le score, puis le contre-couvreur avec son ETA. `attacks.txt` conserve désormais les événements
+`GROUP3_REVENGE_*`, `GROUP3_COUNTER_COVER_*` et `GROUP3_EXCHANGE_FINISHED`.
+
+```powershell
+java -cp .\out Experimental3v3RevengeTest
+java -cp .\out VisualValidation3v3Capture
+```
+
+Les tests A–E garantissent un seul revenger, un risque borné, au maximum un contre-couvreur, l'absence
+de chaîne infinie, une résolution physique naturelle et le déterminisme. Le jalon 6 prolonge désormais
+ces échanges après la première élimination.
+
+## 18. Jalon expérimental 3v3 — clusters et transitions d'effectif
+
+Le jalon 6 sépare clairement deux notions : un regroupement local ne change pas l'Engagement, tandis
+qu'une élimination peut reconstruire l'architecture de combat. Le match ne s'arrête plus au premier
+mort et continue jusqu'à la victoire d'une équipe.
+
+### `LocalEngagementCluster` : description, pas ordre collectif
+
+Toutes les `0,15 s`, le moteur construit un graphe biparti entre adversaires vivants. Deux Agents sont
+reliés s'ils sont à moins de `2,75 m` ou si leur meilleur ETA d'impact est inférieur à `0,85 s`.
+Les composantes connectées deviennent des `LocalEngagementCluster` contenant les membres bleus et
+rouges, leur centre, rayon, meilleur ETA, confiance d'isolation, caractère contesté et raison.
+
+Un cluster peut donc décrire :
+
+- une ligne centrale partagée ;
+- un 2v1 temporaire encore couvert ;
+- une aile en cours d'isolement ;
+- une isolation durable.
+
+Il ne crée jamais directement `DUEL` ou `TWO_VS_ONE`, ne verrouille aucune cible et ne commande pas
+une rotation. Il renseigne seulement l'attention, le debug et les futures décisions géométriques.
+
+### Isolation fondée sur les ETA et la couverture
+
+Lorsqu'un Agent est seul dans un cluster face à plusieurs ennemis :
+
+```text
+isolationConfidence = 0,34 × surcharge numérique
+                    + 0,34 × perte de CoverNetwork
+                    + 0,32 × retard du meilleur soutien allié
+```
+
+La confiance doit atteindre `0,66` pendant environ `0,35 s` pour produire une isolation durable.
+Une séparation visuelle seule ne suffit donc pas. Un allié hors du cluster mais capable d'arriver
+avant ou peu après l'impact rend le 2v1 `contested`.
+
+### Transitions collectives 3v2 et 3v1
+
+Après chaque élimination, le moteur nettoie les cibles mortes, observations, plans d'attaque, résumés
+de couverture et clusters. Les formations et `CoverNetwork` sont recalculés immédiatement.
+
+```text
+3 contre 2 → GROUP_3V2 collectif
+3 contre 1 → GROUP_3V1 collectif
+```
+
+Le 3v2 n'est jamais transformé automatiquement en `2v1 + 1v1`. La formation à trois reste souple ;
+le duo survivant utilise deux positions latérales adaptées. En 3v1, deux attaquants peuvent considérer
+la même cible depuis des lignes distinctes, mais un troisième stab simultané reste interdit et un
+couvreur est conservé.
+
+### Retour vers les moteurs validés
+
+Quand aucun camp ne possède encore trois survivants, le moteur 3v3 est fermé proprement :
+
+```text
+2 contre 2 → EngagementType.GROUP_2V2
+2 contre 1 → EngagementType.TWO_VS_ONE
+1 contre 1 → EngagementType.DUEL
+```
+
+Le handoff réutilise les constructeurs, rôles `FIX/FLANK/SURVIVE`, manœuvres, décisions et collisions
+existants. Le `TWO_VS_ONE` n'a pas été recalibré. Après une nouvelle mort, le handoff peut progresser
+de 2v2 vers 2v1, puis vers 1v1, jusqu'à `COMPLETE`.
+
+### Tests, debug et validation
+
+Avec `D`, l'interface affiche la phase courante et chaque cluster avec membres, ETA, confiance
+d'isolation et raison. Les métriques comptent clusters, 2v1 temporaires, clusters contestés,
+isolations durables, créations 3v2/3v1, handoffs et références mortes supprimées.
+
+```powershell
+java -cp .\out Experimental3v3TransitionTest
+java -cp .\out VisualValidation3v3Capture
+```
+
+Les tests A–G vérifient les clusters contestés, l'isolation persistante, l'absence de scission du 3v2,
+le 3v1 collectif, les trois handoffs, le déterminisme et des matchs naturels complets sans position
+invalide. `contact-sheet.png` reste centré sur la première mort ; `transition-sheet.png` montre les
+huit instants suivants. `transitions.txt` enregistre les changements collectifs et handoffs, tandis
+que `match-result.txt` confirme l'heure, la phase finale et le vainqueur du match complet.
+
+### Finition et batch de 500 seeds
+
+Les clusters influencent maintenant réellement le moteur sans commander les joueurs : une menace du
+même cluster reçoit un faible bonus de saillance dans l'attention, et une cible durablement seule face
+à au moins deux ennemis peut produire `TARGET_ISOLATED_FROM_COVER_NETWORK`. Chaque occasion conserve
+un `ClusterOpportunityEvidence` figé : nombres locaux, confiance d'isolation, ETA minimum, état
+contesté et raison. Une légère correction de mouvement ramène l'isolé vers sa formation, sans position
+imposée ni verrouillage de cible.
+
+Un blocage découvert par le batch concernait deux stabs en Hold contre une même parade. Le Hold reste
+sans durée maximale. Cependant, quand deux partenaires tiennent réellement la même cible et la même
+hauteur, le premier maintient la menace et le second choisit explicitement la hauteur opposée. Cela
+peut ouvrir un stab ou exiger une parade haut/bas ; le troisième joueur reste couvreur.
+
+```powershell
+java -cp .\out Experimental3v3BatchTest 100
+java -cp .\out Experimental3v3BatchTest 500
+```
+
+Résultat final des seeds 1–500 : `500` matchs terminés, `0` timeout, `0` position invalide,
+`0` sortie d'arène et `0` échec de déterminisme. Le batch a observé `305` isolations durables,
+`1553` engagements issus d'un cluster, `247` hits correspondants, `394` transitions 3v2,
+`314` transitions 3v1 et les trois types de handoff.
+
+### Correctif du freeze post-élimination — jalon 2 transactionnel
+
+Le changement d'effectif du `MODERN_3V3` ne reconstruit plus directement le moteur depuis plusieurs
+branches. À la fin de la résolution physique d'un tick, `captureRoster()` produit un
+`RosterSnapshot` contenant deux masques stables de trois bits et les nombres de survivants. Le moteur
+appelle ensuite uniquement :
+
+```text
+requestRosterTransition(snapshot)
+→ applyPendingRosterTransition()
+```
+
+`processedRoster` représente l'effectif déjà installé et `pendingRosterTransition` l'effectif final
+observé pendant le tick. Si deux Agents meurent pendant le même pas physique, leurs décès apparaissent
+donc dans un seul snapshot et une seule reconstruction. Le snapshot traité et l'ancien
+`experimentalAliveMask` sont mis à jour immédiatement après l'installation réussie.
+
+Chaque transition réserve un identifiant monotone et conserve deux `TransitionTrace` structurés : une
+requête avec `applied=false`, puis sa conclusion avec `applied=true`. Les deux entrées contiennent le
+même identifiant, le tick, le temps simulé, les contrôleurs et phases avant/après, les masques, les
+effectifs et la raison. Ces traces restent en mémoire et ne produisent aucun spam de console.
+
+Les gardes `transitionInProgress` et `transitionAppliedThisTick` empêchent respectivement une
+réentrance et une deuxième application pendant le même tick. Un `TransitionKey` déjà appliqué provoque
+une erreur explicite au lieu d'être ignoré ou reconstruit indéfiniment. Les métriques exposent les
+requêtes, applications, doublons, tentatives récursives et tentatives multiples par tick.
+
+```powershell
+java -cp .\out Experimental3v3TransitionTest
+java '-Djava.awt.headless=true' -cp .\out Experimental3v3SwingTransitionTest
+java -cp .\out Experimental3v3BatchTest 500
+```
+
+Les tests A–J couvrent maintenant la première mort 3v3→3v2, une double mort simultanée et l'absence de
+réapplication pendant 1 000 ticks. Le batch 3v3 termine toujours `500/500` matchs sans timeout ni
+divergence déterministe. Il produit `1463` requêtes et exactement `1463` applications, avec `0`
+requête dupliquée, `0` application dupliquée, `0` réentrance et `0` seconde application dans un même
+tick. Les 28 critères 2v2 passent encore sur 500 seeds.
+
+### Contrôleur actif irréversible — jalon 3
+
+`SimulationScenario` et le moteur actif ont maintenant deux responsabilités distinctes. Le scénario
+reste la description immuable de l'origine du match (`MODERN_3V3` ou `CONTROLLED_3V3`). Le champ
+`activeCombatController`, de type `ActiveCombatController`, désigne exclusivement le moteur autorisé à
+recevoir le prochain tick :
+
+```text
+GROUP_3V3 → GROUP_3V2 → GROUP_3V1
+                    ↘ GROUP_2V2 → TWO_VS_ONE → DUEL → COMPLETE
+```
+
+La boucle expérimentale utilise un `switch` sur ce contrôleur. Les trois contrôleurs de groupe passent
+par le moteur collectif 3v3 ; `GROUP_2V2`, `TWO_VS_ONE` et `DUEL` passent uniquement par le moteur de
+handoff existant. Les conditions internes de ce dernier consultent également le contrôleur, et non
+plus le scénario initial ou seulement `experimentalGroupPhase`.
+
+Lors d'un handoff, l'ancien engagement 3v3 est brisé, `modernGroup3Engagement` devient `null`, le nouveau
+contrôleur est installé dans la même transaction et sa conformité avec le contrôleur demandé est
+vérifiée avant de valider `processedRoster`. Puisque les morts ne reviennent pas, aucun chemin ne permet
+de réinstaller un contrôleur 3v3 après `GROUP_2V2`, `TWO_VS_ONE` ou `DUEL`.
+
+Le test K force successivement 2v2, 2v1 et 1v1. Il vérifie que le scénario reste 3v3, que le nouveau
+contrôleur reçoit le tick suivant et que tous les compteurs des anciens contrôleurs cessent
+d'augmenter. Sur 500 matchs naturels, les ticks observés sont :
+
+```text
+GROUP_3V3=277675  GROUP_3V2=77612  GROUP_3V1=123060
+GROUP_2V2=85589   TWO_VS_ONE=125222  DUEL=21114
+```
+
+Les `1463` transitions restent appliquées exactement une fois, sans doublon, réentrance ou seconde
+application dans le même tick. Aucun paramètre tactique n'a été modifié.
+
+### Purge centrale des références mortes — jalon 4
+
+Avant de reconstruire un contrôleur, la transaction appelle désormais une seule méthode :
+`purgeDeadReferences(aliveAgents())`. L'ensemble `alive` utilise l'identité des objets et sert de source
+de vérité commune à toute la purge. Elle traite, pour chaque Agent survivant, les cibles et marques,
+relations de couverture, références de pression et dézonage, menace tactique, cible de mouvement,
+`AttentionAllocation`, `MultiThreatAttention`, observations et cartes de menaces.
+
+Les objets composés sont invalidés si l'un de leurs participants est mort : `CoverAssessment`,
+`AttackOpportunity`, `RevengeOpportunity`, `CounterCoverAssessment`, `WeaponThreatLane` et
+`LocalManeuver`. Dans le groupe collectif, la même passe nettoie les liens de couverture actifs,
+clusters, temps d'isolation, preuves figées, plans d'attaque, revenge et contre-couverture.
+
+Les tableaux originaux de `TeamFormation3` et `CoverNetwork` restent les identités stables du roster et
+ne sont jamais utilisés directement comme cible. En revanche, leurs rôles, liens viables et plans actifs
+ne peuvent conserver un mort. Une manœuvre dont un rôle disparaît n'est pas supprimée : son type, sa
+durée et sa direction sont conservés, puis `rebindGroup3Maneuver()` réaffecte intérieur et extérieur aux
+survivants. Cela évite un nouveau tirage aléatoire et préserve le gameplay. Les `CoverLink` marqués
+`dead_participant` et `viable=false` restent uniquement des résultats diagnostiques ; ils ne comptent
+pas comme liens actifs.
+
+Après l'installation du nouveau contrôleur, `auditDeadReferences()` produit un `DeadReferenceAudit` :
+
+```text
+activeDeadTargets
+deadAttentionReferences
+deadCoverLinks
+deadClusterMembers
+deadFormationMembers
+deadPlanMembers
+details
+```
+
+En cas de compteur non nul, la transition échoue immédiatement avec les détails au lieu de continuer
+avec un état corrompu. Le test L injecte volontairement le même mort dans la cible, le plan, la
+couverture, la pression, le mouvement et l'attention, puis vérifie leur disparition.
+
+Sur 500 matchs : `1463` transitions appliquées, `1463` purges, `0` référence morte après transition,
+`500/500` matchs terminés et `0` échec déterministe. Le test Swing et les 28 critères 2v2 restent
+valides.
+
+### Journal borné, watchdog et failsafe — jalon 5
+
+Les transitions utilisent maintenant `TransitionLogger`. Une requête et son application produisent
+chacune une ligne structurée avec identifiant, tick, temps, contrôleurs, phases, masques et raison. Le
+logger conserve au maximum `256` lignes et `256` clés de déduplication ; lorsque la limite est atteinte,
+la ligne et la clé les plus anciennes sont retirées ensemble. Le mode normal ne fait aucun
+`System.out.println()` : `consoleLinesEmitted` reste donc à zéro. Un futur mode de diagnostic peut
+activer la console sans perdre la déduplication.
+
+`emitOnce(key, line)` garantit qu'une même erreur structurelle ne remplit pas la console. Les métriques
+séparent `consoleLinesEmitted`, `duplicateConsoleLinesSuppressed` et `storedLinesDropped`. Le test M
+envoie 1 000 fois la même erreur : une seule ligne est stockée et `999` doublons sont supprimés. Après
+300 clés supplémentaires, le buffer reste exactement à 256 lignes. Le journal tactique général est
+également limité à `4096` événements.
+
+Après chaque tick visible, `ProgressSnapshot` capture le tick, le temps simulé, le contrôleur, le roster,
+les six positions et les six états. Le watchdog compare deux snapshots successifs et mesure :
+
+```text
+ticksWithoutAnyPositionChange
+ticksWithoutAnyStateChange
+repeatedTransitionStateTicks
+logicalFreezeReports
+```
+
+Un freeze logique exige cinq secondes simulées sans aucun déplacement, changement d'état, changement
+de contrôleur ni changement de roster. Un Hold individuel n'est donc pas une erreur si les autres
+Agents continuent de bouger ou de combattre. Le test N maintient volontairement un Agent en Hold pendant
+six secondes et confirme qu'aucun freeze global n'est signalé.
+
+Le failsafe conserve les demandes de roster des 60 derniers ticks. Si le même roster non traité est
+demandé plus de deux fois, le match est mis en pause une seule fois et un `TransitionFailsafeReport`
+fige le scénario, le contrôleur, les rosters courant/traité/pending, la dernière transition, le dernier
+audit, les engagements actifs et une pile simplifiée. Le test O vérifie qu'une quatrième demande ne
+crée ni second rapport ni nouvelle ligne.
+
+Sur les 500 matchs naturels : `maximumTicksWithoutPositionChange=0`,
+`maximumTicksWithoutStateChange=2112`, `maximumRepeatedTransitionStateTicks=0`,
+`logicalFreezeReports=0`, `transitionFailsafePauses=0` et `consoleLinesEmitted=0`. Une longue période
+sans changement d'état n'est pas considérée comme figée puisque les positions continuent d'évoluer.
+
+### Mode graphique de reproduction et validation finale — jalon 6
+
+La commande suivante ouvre le même `MapPanel`, le même `javax.swing.Timer` et le même chemin de combat
+que le menu 3v3 normal :
+
+```powershell
+java -cp .\out Main debug-3v3-transition 41
+```
+
+`Main` conserve `MODERN_3V3` comme scénario et active uniquement un `TransitionDebugRecorder` sur le
+panneau créé. À la première mort, le recorder mémorise l'heure et l'effectif, puis observe encore
+15 secondes réelles à vitesse 1×. À chaque callback, il compare les six positions et états, compte les
+nouveaux départs d'attaque et les morts suivantes. Le timer et les repaint continuent même si la partie
+se termine avant la fin de la fenêtre d'observation.
+
+La création du rapport est déclenchée depuis l'EDT, mais l'écriture UTF-8 utilise un
+`CompletableFuture` : aucun accès disque n'allonge le callback Swing. Le fichier se trouve dans :
+
+```text
+out/debug/transition-seed-<seed>.log
+```
+
+Il contient la progression post-mort, les transitions REQUEST/APPLIED, tous les compteurs
+transactionnels, le dernier audit, le watchdog, le résultat du match et les métriques EDT. Le test
+`Debug3v3TransitionSeedsTest` crée en parallèle trois vrais panneaux à 1×, appelle régulièrement leur
+méthode de rendu dans une image et attend les quinze secondes complètes pour les seeds 41, 73 et 119.
+
+```powershell
+java '-Djava.awt.headless=true' -cp .\out Debug3v3TransitionSeedsTest
+```
+
+Résultats observés :
+
+```text
+seed 41  : 891 ticks, 396 changements de position, 57 changements d'état,
+           12 attaques, 2 morts suivantes, EDT max 14,590 ms, match terminé
+seed 73  : 888 ticks, 765 changements de position, 77 changements d'état,
+           15 attaques, 2 morts suivantes, EDT max 4,984 ms, match terminé
+seed 119 : 891 ticks, 510 changements de position, 47 changements d'état,
+           9 attaques, 3 morts suivantes, EDT max 4,711 ms, match terminé
+```
+
+Pour les trois seeds : `duplicateTransitionApplications=0`, `recursiveTransitionAttempts=0`,
+`deadReferencesAfterTransition=0`, `logicalFreezeReports=0`, `edtTicksOver50Ms=0` et
+`consoleLinesEmitted=0`. Les fichiers produits sont directement consultables dans `out/debug`.
+
+### Approche 3v3 dynamique — nouveau jalon 1 : modèle et persistance
+
+Le nouveau chantier d'approche commence par une couche de décision qui ne touche encore ni aux
+vitesses ni aux attaques. `Group3ContactBand` sépare `FAR_APPROACH`, `SPACE_CONTEST`, `CONTACT` et
+`ACTIVE_EXCHANGE`. La sélection utilise la distance entre centres, la plus petite distance adverse, le
+nombre d'oppositions sous portée potentielle et les états physiques d'attaque/parade. Des seuils de
+sortie différents des seuils d'entrée fournissent l'hystérésis ; un contact réel peut passer directement
+de FAR à CONTACT sans attendre un tick intermédiaire.
+
+Chaque équipe possède indépendamment un `Group3ApproachPlan`. Il conserve un `ApproachPattern`, une
+durée minimale/préférée/maximale, les rôles temporaires conducteur/soutien/arrière, le signe latéral,
+trois engagements de mouvement, le centre initial et un point de rencontre prédit. Le point part du
+milieu des équipes puis reçoit un décalage latéral borné entre `0,45` et `1,30 m`, avec correction du
+bord de l'arène.
+
+La sélection utilise un générateur dérivé de la seed, de l'équipe et du numéro de plan. Elle ne consomme
+pas le `Random` principal du combat : ajouter le modèle ne décale donc pas les futurs tirages d'attaque.
+Les plans bleu et rouge restent déterministes mais ne sont pas des miroirs obligatoires. Un plan dure au
+moins `1,2–1,8 s`, vise `2,0–3,4 s` et expire entre `4,0–5,0 s`. Il peut être interrompu par une menace de
+pointe imminente, une formation réellement brisée, un bord critique ou une isolation durable.
+
+Les tests A–E de `Group3ApproachPlanTest` vérifient le point latéral, les trois rôles distincts, la
+persistance au-delà des intervalles de perception, le déterminisme, l'indépendance des équipes,
+l'hystérésis et l'absence de création de duel au premier contact. Le batch 3v3 de 100 seeds et les 28
+critères 2v2 passent sans régression. Le steering utilisera ces plans au jalon suivant ; ce premier jalon
+ne prétend donc pas encore modifier visuellement les trajectoires.
+
+### Approche 3v3 dynamique — jalon 2 : steering, vitesse et profondeur
+
+Le plan persistant pilote désormais réellement les Agents pendant `FAR_APPROACH` et
+`SPACE_CONTEST`. La méthode `group3ApproachVelocity()` transforme le motif, les engagements du plan,
+le rôle temporaire et le point de rencontre en une vitesse composée dans le repère de la formation.
+Elle ne téléporte aucun joueur et n'impose aucune position : cette vitesse passe toujours par
+`integrateVelocity()`, donc par l'accélération et l'inertie liées au jeu de jambes, puis par la limite de
+vitesse, la pénalité de recul, les collisions et les limites de l'arène.
+
+À longue distance, la projection avant demandée est bornée entre `0,78` et `1,05 m/s` et la projection
+latérale entre `0,28` et `0,58 m/s`. Dans `SPACE_CONTEST`, la poussée avant descend progressivement dans
+la plage `0,42–0,78 m/s`, tandis que la contestation latérale monte dans la plage `0,42–0,72 m/s`. Le
+motif module ces valeurs : un sweep accentue la composante latérale, une contre-rotation sacrifie une
+partie de l'avance, et une entrée retardée ralentit légèrement la progression. La distance latérale au
+`predictedMeetingPoint` module aussi la poussée sans pouvoir inverser brutalement le plan.
+
+Les trois rôles n'utilisent pas la même projection. Le conducteur reçoit un facteur avant de `1,12`, le
+soutien `1,00` et l'arrière `0,88`; leur moyenne conserve donc la consigne collective. Une correction de
+profondeur souple vise respectivement `+depthCommitment`, `+0,22 × depthCommitment` et
+`-0,68 × depthCommitment`. Il s'agit d'une force bornée, non d'une destination obligatoire : évitement,
+menace, bord et collision peuvent toujours déformer la ligne.
+
+`Group3SteeringComposition` rend la somme explicite :
+
+```text
+desiredVelocity = approachContribution
+                + teamManeuverContribution
+                + localManeuverContribution
+                + formationContribution
+                + coverContribution
+                + avoidanceContribution
++ boundaryContribution
+```
+
+L'évitement 3v3 parcourt explicitement les deux partenaires vivants; il ne réutilise pas le raccourci
+2v2 qui ne connaît qu'un seul coéquipier.
+
+Pendant `FAR_APPROACH`, les poids manœuvre/formation/couverture sont `0,18 / 0,32 / 0,28`; pendant
+`SPACE_CONTEST`, ils deviennent `0,42 / 0,65 / 0,62`. Dès `CONTACT`, ou si le plan a été annulé par une
+urgence physique, ils reviennent à `1,0`. Ainsi, une pointe imminente ou une formation réellement brisée
+conserve toute sa priorité. Inversement, les seuils de `RECOVER_FORMATION` et `COMPRESS` sont assouplis
+à longue distance : un lien momentanément imparfait ne ramène plus immédiatement tout le monde au
+centre.
+
+Les normes de chaque contribution sont accumulées dans `Group3v3Metrics`, ce qui permet de vérifier que
+l'approche domine réellement loin du contact sans deviner son effet à l'écran. Les tests A–G de
+`Group3ApproachSteeringTest` contrôlent le déplacement avant et latéral, la profondeur conducteur/arrière,
+la dominance des contributions, la restitution du moteur existant au contact, le déterminisme exact,
+les plages de vitesse réellement appliquées et l'absence de récupération abusive pour une faiblesse de
+couverture lointaine. Les attaques, leurs seuils, le `TWO_VS_ONE`, le moteur 2v2 et les transitions
+d'effectif restent inchangés.
+
+### Premier contact 3v3 — jalon 3 : événements et audit des fronts plats
+
+Le moteur distingue maintenant le passage global en bande `CONTACT` du premier contact individuel de
+chaque Agent. Après le déplacement physique, `measureGroup3FirstContacts()` cherche l'adversaire vivant
+le plus proche. Lorsque sa distance est inférieure ou égale à `2,95 m`, un `FirstContactEvent` immuable
+enregistre l'Agent, cet adversaire, le temps simulé, son `FormationRole3`, la distance réelle et la
+présence d'une couverture physique suffisante. Un Agent ne reçoit qu'un seul premier événement : les
+changements ultérieurs de cible ne réécrivent donc pas l'histoire.
+
+La dispersion temporelle est calculée par :
+
+```text
+firstContactSpread = dernier temps de premier contact
+                   - premier temps de premier contact
+```
+
+Une fenêtre glissante de `0,12 s` mesure aussi le plus grand nombre de premiers contacts simultanés.
+Elle alimente séparément `simultaneousThreePlayerContacts` et `simultaneousSixPlayerContacts`. Ces
+compteurs sont descriptifs : aucun délai artificiel n'est ajouté aux Agents.
+
+Avant le premier événement, `measureGroup3PreContactGeometry()` accumule les déplacements avant et
+latéraux des deux centres, la largeur, la profondeur, la profondeur maximale, la déviation par rapport
+aux lignes centrales initiales et la corrélation des chemins. Pour comparer deux équipes qui avancent
+l'une vers l'autre, la corrélation emploie :
+
+```text
+teamPathCorrelation = -dot(normalize(blueDelta), normalize(redDelta))
+```
+
+Une valeur proche de `1` décrit donc des trajectoires opposées mais presque parfaitement symétriques.
+Les temps jusqu'à `SPACE_CONTEST`, au premier contact et à la première attaque sont conservés
+indépendamment.
+
+`FlatFrontConvergenceAudit` est finalisé lorsque les six Agents ont un événement, `1,50 s` après le
+premier événement, ou juste avant une transition provoquée par une élimination. Il combine six signaux :
+
+```text
+déplacement latéral < 0,55 m
+profondeur moyenne < 0,28 m
+au moins quatre contacts comprimés sous 0,18 s
+corrélation des chemins > 0,88
+déviation moyenne de ligne < 0,32 m
+durée d'approche > 4,20 s
+```
+
+Trois signaux au moins sont nécessaires pour déclarer l'approche suspecte. La chaîne `reason` conserve
+tous les signaux présents, même lorsque le total reste insuffisant. L'audit ne change ni cible, ni plan,
+ni vitesse, ni décision d'attaque : il sert uniquement à trouver les seeds visuellement fades.
+
+`Group3FirstContactAuditTest` couvre un contact aile–centre–arrière décalé, un front plat simultané, le
+maintien d'un unique contrôleur `GROUP_3V3` sans `DUEL`, et le déterminisme exact. Sur 100 matchs :
+`approachAudits=100`, `flatFrontConvergences=1`, `simultaneousSixPlayerContacts=15`, dispersion moyenne
+`0,669 s`, déplacement latéral pré-contact moyen `0,787 m`, sans timeout, freeze, sortie d'arène,
+référence morte ni échec déterministe.
+
+### Validation visuelle de l'approche — jalon 4
+
+`ApproachVisualValidationCapture` rejoue les seeds `41`, `73` et `119` avec un pas physique de
+`1/120 s`, soit le même écoulement simulé qu'à vitesse `1×`. Chaque seed est exécutée deux fois : la
+version active normale, puis une baseline visuelle qui désactive uniquement la contribution
+`Group3ApproachPlan`. Cette option est inaccessible depuis l'interface et ne réactive ni `FRONT_LINE`,
+ni un ancien contrôleur; elle sert seulement à reconstruire le déplacement pré-jalon avec la même seed,
+les mêmes Agents et le même moteur d'attaque.
+
+La commande reproductible est :
+
+```powershell
+java '-Djava.awt.headless=true' -cp .\out ApproachVisualValidationTest
+```
+
+Pour chaque seed, huit images sont prises à `0,00`, `0,40`, `0,80`, `1,20`, `1,60`, `2,00`, `2,40` et
+`2,80 s`. Elles affichent la bande de contact, le nombre d'événements individuels, la courbure de la
+formation, le corps, la pointe et l'état simple des armes. Les trajectoires sont échantillonnées toutes
+les `0,05 s`. Les fichiers se trouvent sous :
+
+```text
+out/approach-validation-3v3/seed-<seed>/
+```
+
+Chaque dossier contient `old-contact-sheet.png`, `new-contact-sheet.png`, les deux trajectoires, deux
+planches comparatives et les rapports `approach.txt`, `first-contact.txt` et `flat-front-audit.txt`. Les
+versions `old-*` et `new-*` des rapports restent également disponibles pour l'analyse différentielle.
+
+Résultats observés :
+
+| Seed | Premier contact baseline → actif | Spread baseline → actif | Latéral baseline → actif | Profondeur baseline → actif |
+|---:|---:|---:|---:|---:|
+| 41 | `3,467 → 1,608 s` | `0,092 → 0,192 s` | `0,101 → 0,774 m` | `0,009 → 0,382 m` |
+| 73 | `3,475 → 1,658 s` | `0,083 → 0,475 s` | `0,086 → 0,914 m` | `0,015 → 0,476 m` |
+| 119 | `3,467 → 1,367 s` | `0,092 → 1,183 s` | `0,103 → 0,682 m` | `0,009 → 0,201 m` |
+
+Les trois baselines sont classées plates et produisent un contact simultané des six Agents. Les trois
+versions actives sont non suspectes et ne produisent aucun contact simultané à six dans la fenêtre de
+`0,12 s`. La seed 119 a la profondeur la plus faible, mais aussi le spread le plus large et une courbure
+claire. Les paramètres du jalon 2 sont donc conservés : augmenter encore la profondeur pour cette seule
+seed rigidifierait les seeds 41 et 73 et constituerait un réglage excessif sur l'échantillon visuel.
+
+`ApproachVisualValidationTest` vérifie l'existence et la résolution de tous les fichiers, puis exige pour
+chaque seed un contact plus rapide, un spread supérieur, au moins quatre fois plus de déplacement
+latéral, au moins huit fois plus de profondeur, et le passage d'un audit plat à un audit non suspect.
+
+### Acceptation finale de l'approche 3v3 — jalon 5
+
+> Cette acceptation est celle du moteur d'approche avant le chantier Dead Agent 6.1–6.3. Les
+> paramètres d'approche n'ont pas été modifiés, mais le lot complet n'a pas encore été rejoué après
+> l'intégration de `DeathPose`.
+
+Le jalon final n'ajoute aucun comportement au moteur. Il fige les paramètres retenus au jalon 4 et
+exécute les validations complètes avec le même code que l'application. La séquence reproductible est :
+
+```powershell
+javac -encoding UTF-8 -d .\out .\src\*.java
+java '-Djava.awt.headless=true' -cp .\out ApproachVisualValidationTest
+java -cp .\out Group3FirstContactAuditTest
+java -cp .\out Group3ApproachSteeringTest
+java -cp .\out Group3ApproachPlanTest
+java -cp .\out Experimental3v3TransitionTest
+java -cp .\out Experimental3v3BatchTest 100
+java -cp .\out Experimental3v3BatchTest 500
+java -cp .\out FinalAcceptanceTest 500
+```
+
+Le lot 3v3 de 500 matchs donne :
+
+```text
+matchesCompleted=500
+timeouts=0
+blueWins=254
+redWins=246
+transitionRequests=1577
+transitionApplications=1577
+deadReferencesAfterTransition=0
+logicalFreezeReports=0
+transitionFailsafePauses=0
+approachAudits=500
+flatFrontConvergences=1
+simultaneousSixPlayerContacts=49
+averageFirstContactSpread=0,738 s
+averagePreContactLateralDistance=0,787 m
+averagePreContactDepth=0,305 m
+averageTimeToFirstContact=1,497 s
+averageTimeToFirstAttack=4,482 s
+invalidPositions=0
+arenaExits=0
+determinismFailures=0
+consoleLinesEmitted=0
+```
+
+Le lot 2v2 de 500 matchs termine également `500/500`, sans timeout, stalemate, position invalide,
+sortie d'arène, thrashing ni échec déterministe. `FinalAcceptanceTest` confirme ses 28 critères, y
+compris le maintien du groupfight jusqu'à la première mort, le handoff physique vers le `TWO_VS_ONE`,
+les chaînes causales et l'absence d'activation des anciens systèmes.
+
+Correspondance des 28 critères demandés pour l'approche :
+
+1. Le watchdog reste silencieux : `logicalFreezeReports=0`.
+2. La console normale reste silencieuse : `consoleLinesEmitted=0`.
+3. Les transitions restent transactionnelles : `1577` requêtes pour `1577` applications.
+4. Le 2v2 passe son acceptation complète sur 500 matchs.
+5. Le `TWO_VS_ONE` passe toujours ses tests B–F.
+6. Le premier contact moyen arrive à `1,497 s`.
+7. Le déplacement latéral pré-contact moyen atteint `0,787 m`.
+8. Les choix bleu et rouge utilisent des RNG dérivés indépendants.
+9. Les rôles temporaires permettent à une aile de conduire.
+10. La profondeur moyenne pré-contact atteint `0,305 m`.
+11. Un seul audit sur 500 reste classé plat.
+12. Seulement 49 matchs sur 500 ont six contacts dans la fenêtre de `0,12 s`.
+13. Les seuils lointains de couverture n'imposent plus une récupération immédiate.
+14. L'annulation d'un plan restitue tous les poids aux urgences physiques.
+15. Le moteur d'attention limitée et ses délais ne sont pas modifiés.
+16. Les attaques passent toujours par `AttackOpportunity`.
+17. Le plan d'approche ne lance aucun stab.
+18. Revenge n'est pas recalibré.
+19. Contre-couverture n'est pas recalibrée.
+20. Dégâts, collisions d'arme et parades restent physiques.
+21. Les clusters restent descriptifs.
+22. Les tests de contact confirment qu'aucun `DUEL` fixe n'est créé.
+23. Aucun comportement n'est codé pour une seed; les seeds 41/73/119 ne sont que des entrées de capture.
+24. Les plans persistent et les tests ne détectent aucun thrashing.
+25. Les replays déterministes passent sur les lots 100 et 500.
+26. Les transitions et matchs graphiques restent actifs après une mort.
+27. Les batchs 100 et 500 passent pour le 3v3 et l'acceptation 2v2.
+28. Les README français et chinois décrivent le modèle, les formules, les tests et les résultats.
+
+Les systèmes de transition gelés, `GROUP_2V2`, `TWO_VS_ONE`, les seuils d'attaque, les timings, les
+parades, les dégâts, revenge et contre-couverture n'ont reçu aucune modification pendant les jalons
+d'approche. Le seul chemin alternatif est le baseline de capture, désactivé par défaut et inaccessible au
+jeu normal.
+
+## 19. Audit des joueurs morts — jalons 6.1 et 6.2
+
+Le watchdog global prouvait que le match continuait après une élimination, mais il ne prouvait pas que
+le cadavre était réellement neutre. `DeadAgentIsolationTest` a donc instrumenté séparément : mouvement,
+intégration de vitesse, rotation du corps et de l'arme, collisions, évitement, bord, formation,
+couverture, cluster, attention et sélection de cible.
+
+Le bug reproduit était un véritable déplacement logique post-mortem : dans le chemin 3v3 collectif,
+un Agent `DEAD` pouvait encore passer par perception, steering, intégration et correction de bord. Le
+rendu gris n'était donc pas la cause ; il révélait un joueur mort toujours admis dans des systèmes
+actifs.
+
+### Expériences différentielles A, B, C et D1
+
+Les expériences utilisent la même seed et la même mort contrôlée :
+
+| Variante | Modification expérimentale | Conclusion |
+|---|---|---|
+| A | comportement courant de l'ancienne version | reproduisait le mort actif |
+| B | cadavre masqué au rendu seulement | permettait de distinguer logique et dessin |
+| C | décalage visuel seulement | confirmait qu'une transformation graphique ne devait pas changer le combat |
+| D1 | neutralisation logique du mort | immobilisait et excluait le mort sans modifier le rendu |
+
+Les captures différentielles comparent les survivants à plusieurs checkpoints du même tick : attention,
+cible, formation, couverture, manœuvre, décision de combat, steering, intégration, résolution physique
+et fin de tick. Pour les seeds `41`, `73` et `119`, la première contamination structurelle de l'ancienne
+version apparaît au tick `61`, immédiatement après la reconstruction du réseau de couverture : le mort
+figurait encore dans `activeParticipants`. La propagation différait ensuite selon la seed : qualité des
+liens de couverture pour 41/73, puis consommation RNG précoce pour 119.
+
+Les rapports sont conservés sous :
+
+```text
+out/dead-agent-differential/6.2b.2-seed-summary.txt
+out/dead-agent-differential/seed-41/6.2b.2/
+out/dead-agent-differential/seed-73/6.2b.2/
+out/dead-agent-differential/seed-119/6.2b.2/
+```
+
+Cette analyse explique pourquoi une comparaison naïve de deux fins de match était insuffisante : dès
+qu'une branche consomme un tirage aléatoire supplémentaire, les survivants peuvent diverger même après
+suppression de la cause physique initiale.
+
+### Audit du RNG et bande sémantique expérimentale
+
+Le jalon 6.2b.3.1 inventorie tous les appels au RNG de `DuelSimulation` sans les remplacer :
+
+```text
+157 appels
+153 lignes source
+63 finalités sémantiques
+0 appel classé OTHER
+```
+
+`RandomDrawPurpose` distingue notamment perception, bruit de position, choix de manœuvre, décision de
+parade, distance estimée, délai de réaction, Chamber, backstab, dézonage, feinte, appât, visée et dégâts.
+`SemanticRandomDrawKey` identifie un tirage par tick, checkpoint, demandeur, sujet, finalité et index
+local. `SemanticRandomTape` sait enregistrer, rejouer et fournir un fallback déterministe, tout en
+détectant les clés dupliquées et les requêtes non appariées.
+
+Important : cette infrastructure n'est pas branchée au RNG de production. `SimulationRandom` et les
+157 appels gardent leur comportement actuel. Le tape sert à préparer des comparaisons causales ; il ne
+change ni probabilités ni replays normaux.
+
+Commandes correspondantes :
+
+```powershell
+java -cp .\out DeadAgentCheckpointNonIntrusionTest
+java -cp .\out DeadAgentInternalContaminationTest
+java -cp .\out DeadAgentInternalSeedSummaryTest
+java -cp .\out RandomDrawAuditTest
+java -cp .\out SemanticRandomTapeTest
+```
+
+## 20. Jalon 6.3 — neutralisation permanente des joueurs morts
+
+La décision du jalon 6.3 est de corriger l'invariant de production immédiatement, sans attendre le
+branchement d'un replay RNG complet. Un joueur mort peut rester dans l'historique et être dessiné, mais
+il ne doit plus participer à aucune décision ni interaction active.
+
+### 6.3.1 intégré : pose de mort et gel central
+
+Lors du premier passage `alive → dead`, `DeathPose` capture une seule fois :
+
+```text
+position
+angle du corps
+angle mondial de la baïonnette
+```
+
+La transition centrale `eliminate()` applique ensuite le même ordre pour toute mort de production :
+
+1. capturer la pose avant toute modification ;
+2. placer `alive` à faux et l'état à `DEAD` ;
+3. supprimer cibles, menaces, attention, pression, manœuvres et intentions actives ;
+4. restaurer la pose et annuler vitesse, vitesse désirée et vitesse angulaire ;
+5. purger dans le même tick toutes les références mortes des survivants et structures collectives.
+
+`freezeDeadAgents()` réaffirme l'invariant au début du tick et après la résolution physique. Même si
+une future branche écrit accidentellement une vitesse ou un angle sur le cadavre, la position, le corps
+et la baïonnette reviennent à `DeathPose`. Le gel est idempotent.
+
+`DeadAgentParticipationDomain` sépare les domaines actifs des quatre domaines passifs autorisés :
+
+```text
+autorisés après la mort : RENDER, ROSTER_HISTORY, DEATH_EVENT, RESULT_ACCOUNTING
+
+interdits après la mort : mouvement, vitesse, rotations, évitement, bord,
+formation, couverture, attention, cible, attaque, revenge,
+contre-couverture, manœuvre d'équipe, approche et steering
+```
+
+Le cadavre reste donc visible et gris à sa pose de mort. Il n'est ni un zombie, ni une cible, ni un
+obstacle physique, ni un membre de couverture. Les variantes `HIDDEN_RENDER_ONLY` et
+`VISUAL_OFFSET_ONLY` restent disponibles pour les anciens tests différentiels, mais ne définissent
+pas le comportement normal.
+
+### Validation déjà exécutée après 6.3.1
+
+Au 2 août 2026, les validations suivantes passent sur le code courant :
+
+```text
+compilation UTF-8 de tous les fichiers
+SimulationSmokeTest
+DeadAgentIsolationTest
+DeadAgentNeutralizationDifferentialTest
+Experimental3v3TransitionTest A–O
+git diff --check
+```
+
+Résultat central de `DeadAgentIsolationTest` après 2 000 ticks post-mort :
+
+```text
+maximumDisplacementAfterDeath = 0.0
+mouvement / intégration / rotations = 0
+collisions / évitement / bord = 0
+formation / couverture / cluster = 0
+attention / sélection de cible = 0
+position, corps et baïonnette identiques à DeathPose
+```
+
+Dans le test différentiel actuel, A et D1 sont désormais identiques : l'ancien mode normal bénéficie
+du même invariant permanent que la neutralisation expérimentale.
+
+### Travail 6.3 restant
+
+Le jalon complet n'est pas encore déclaré terminé. Les étapes prévues sont :
+
+- 6.3.2 : assertions dédiées aux réseaux de couverture, attention, cible et combat ;
+- 6.3.3 : arrêt dans le tick de mort, morts multiples, gel Swing réel et comparaison normal/D1 sur
+  les seeds 41/73/119 ;
+- 6.3.4 : campagnes 100 puis 500, rapports `out/dead-agent-fix/6.3/` et validation documentaire finale.
+
+Les anciens résultats de 500 seeds restent affichés plus haut comme références historiques. Ils ne
+constituent pas encore une certification post-6.3.
+
+## 21. Suite de tests recommandée
+
+Compilation et tests fonctionnels principaux :
+
+```powershell
+javac -encoding UTF-8 -d .\out .\src\*.java
+java -cp .\out SimulationSmokeTest
+java -cp .\out TeamManeuverTest
+java -cp .\out ModernGeometryTest
+java -cp .\out ModernGroup2v2Test
+java -cp .\out TwoVsOneCoordinationTest
+java -cp .\out AttackOpportunityTest
+java -cp .\out DecisionExplanationTest
+java -cp .\out AttributeBehaviorAudit
+```
+
+3v3 et transitions :
+
+```powershell
+java -cp .\out Experimental3v3AttentionTest
+java -cp .\out Experimental3v3CoverNetworkTest
+java -cp .\out Experimental3v3AttackPlanTest
+java -cp .\out Experimental3v3RevengeTest
+java -cp .\out Experimental3v3TransitionTest
+java -cp .\out Group3ApproachPlanTest
+java -cp .\out Group3ApproachSteeringTest
+java -cp .\out Group3FirstContactAuditTest
+```
+
+Tests visuels/headless :
+
+```powershell
+java '-Djava.awt.headless=true' -cp .\out ApproachVisualValidationTest
+java '-Djava.awt.headless=true' -cp .\out Debug3v3TransitionSeedsTest
+```
+
+Les lots longs ne doivent être relancés comme acceptation finale qu'après la fin de 6.3.2 et 6.3.3 :
+
+```powershell
+java -cp .\out Experimental3v3BatchTest 100
+java -cp .\out Experimental3v3BatchTest 500
+java -cp .\out FinalAcceptanceTest 500
+```

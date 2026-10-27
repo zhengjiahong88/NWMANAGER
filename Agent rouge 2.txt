@@ -1,0 +1,9 @@
+doubleBlock: 0
+hit: 1
+chamber: 0
+bait: 1
+baitTrap: 0
+punish: 0
+baitAdvance: 0
+dezone: 0
+backWarning: 0

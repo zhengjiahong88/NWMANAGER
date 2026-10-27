@@ -1,0 +1,7 @@
+enum RevengeReason {
+    ATTACK_BLOCKED,
+    ATTACK_MISSED,
+    ATTACK_OVERSHOT,
+    BLOCK_STUN,
+    RECOVERY_EXPOSED
+}

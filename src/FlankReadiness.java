@@ -1,0 +1,6 @@
+enum FlankReadiness {
+    FLANK_NOT_READY,
+    FLANK_APPROACHING,
+    FLANK_THREAT_READY,
+    FLANK_COMMITTED
+}

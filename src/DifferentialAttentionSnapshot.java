@@ -1,0 +1,19 @@
+record DifferentialAttentionSnapshot(
+        String primaryThreatId,
+        String secondaryThreatId,
+        String peripheralThreatId,
+        String pendingPrimaryId,
+        double primaryWeight,
+        double secondaryWeight,
+        double peripheralWeight,
+        double primaryConfidence,
+        double secondaryConfidence,
+        double peripheralConfidence,
+        boolean primaryStateFresh,
+        boolean secondaryStateFresh,
+        boolean peripheralStateFresh,
+        long primaryObservationCount,
+        long secondaryObservationCount,
+        long peripheralObservationCount
+) {
+}

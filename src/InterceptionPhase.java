@@ -1,0 +1,7 @@
+enum InterceptionPhase {
+    APPROACH_INTERCEPT_POINT,
+    BLOCK_FLANK_PATH,
+    PRESENT_THREAT,
+    ENGAGE_FLANKER,
+    FAILED
+}

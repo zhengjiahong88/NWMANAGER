@@ -1,1712 +1,1333 @@
-# NWMANAGER 程式碼說明
+# NWMANAGER：雙人協同刺刀 Groupfight
+
+NWMANAGER 是 Java Swing 製作的可觀看刺刀戰鬥原型。玩家可建立四名 2v2 選手，或在第一階段
+實驗 3v3 中建立六名選手，再觀看 Agent
+依照位置、角度、速度、刺刀尖端、格擋方向與實際碰撞自行戰鬥。
 
 [Version française](README.fr.md)
 
-NWMANAGER 是以 Java Swing 製作的俯視角 2v2 刺刀團隊戰原型。藍隊與紅隊各有兩名 Agent；每人會在戰鬥中選擇敵方目標、回應較危險的攻擊、協助受壓迫的隊友並避免和隊友重疊。這份中文版 README 的重點不是只描述玩法，而是說明程式碼如何把 Agent 能力、AI 決策、二維移動、目標選擇、武器角度、攻防狀態、碰撞及畫面繪製串在一起。
+這份中文版著重說明「程式碼怎麼運作」，方便繼續修改戰鬥引擎。
 
-目前的勝負不是由「命中率」直接抽籤決定。能力值先影響 Agent 的觀察、選擇與操作誤差，之後仍須由實際位置、刺刀尖端、攻擊高度、格擋方向及狀態時間共同完成判定。
+## 1. 執行方式與介面流程
 
-## 執行方式
-
-專案使用 JDK 25。可以直接在 IntelliJ IDEA 執行 `Main`，或在專案根目錄使用 PowerShell：
+Windows 可以直接雙擊 `run.bat`。也可以在專案根目錄執行：
 
 ```powershell
 javac -encoding UTF-8 -d .\out .\src\*.java
 java -cp .\out Main
 ```
 
-程式會先開啟主選單。操作流程是「開始遊戲」→「2v2 友誼賽」→「建立兩支隊伍」→「開始比賽」。隊伍建立頁的藍、紅隊分成兩個分頁，每隊可以輸入隊名並設定兩名玩家。右上角的 `中文`／`Français` 按鈕會切換目前頁面語言；選定語言會沿著整段導覽繼續傳入戰鬥頁。
+介面流程：
 
-操作鍵：
+```text
+主選單 → 遊玩 → 友誼賽
+→ 編輯四名選手的姓名、戰術與能力
+→ 開始 → MODERN_2V2 戰鬥畫面
 
-| 按鍵 | 對應程式行為 |
-| --- | --- |
-| `Space` | 切換 `MapPanel.paused` |
-| `R` | 呼叫 `MapPanel.reset()`，再執行 `DuelSimulation.reset()` |
-| `L` | 在所有頁面切換 `UiLanguage.FRENCH` 與 `UiLanguage.CHINESE` |
-| `Enter` | 執行選單主要按鈕，或在隊伍建立頁開始比賽 |
-| `Esc` | 返回上一頁；戰鬥中則回到主選單 |
-| `0` | 設為 0.25 倍速 |
-| `5` | 設為 0.5 倍速 |
-| `1`、`2`、`4` | 修改 `MapPanel.speed` |
-
-戰鬥畫面左上方也有 `0.25×`、`0.5×`、`1×`、`2×`、`4×` 五個可點擊按鈕；目前速度的按鈕會停用，方便直接辨認。右上角的 `MENU`／「主選單」會停止目前的 Swing `Timer` 再返回主選單，避免離開後戰鬥仍在背景運行。
-
-## 建議閱讀順序
-
-第一次閱讀程式碼時，建議依照以下順序：
-
-1. `Main.java` 與 `MenuPanel.java`：同一個視窗如何在主選單、模式選擇、隊伍建立和戰鬥間導覽。
-2. `SetupPanel.java` 與 `PlayerEditorPanel.java`：兩支隊伍、四名玩家及「開始比賽」驗證。
-3. `TeamConfiguration.java`、`AgentConfiguration.java`、`AgentStats.java` 與 `Tactic.java`：隊名、玩家、十一項能力及戰術如何保存。
-4. `MapPanel.java`：計時器如何推進模擬，以及畫面如何重繪。
-5. `DuelSimulation.java`：主要戰鬥規則、AI、移動與命中判定。
-6. `Musketeer.java`：一名 Agent 保存哪些即時資料，以及刺刀尖端如何計算。
-7. `CombatState.java`、`Decision.java` 及其他 enum：戰鬥狀態、決策、方向、部位與介面語言。
-
-## 程式執行關係
-
-```mermaid
-flowchart TD
-    A["Main.main()"] --> B["單一 JFrame + MenuPanel(MAIN)"]
-    B -->|"開始遊戲"| C["MenuPanel(PLAY)：2v2 友誼賽"]
-    C --> D["SetupPanel：兩個隊名 + PlayerEditorPanel × 4"]
-    D -->|"開始比賽：驗證隊名、玩家與 1–100"| E["TeamConfiguration × 2 + UiLanguage"]
-    E --> F["同一 JFrame 換成 MapPanel"]
-    F --> G["Swing Timer：每約 16 ms 呼叫 tick()"]
-    G --> H["切成最多約 1/120 秒的小步進"]
-    H --> I["DuelSimulation.update(dt)"]
-    I --> J["更新四名 Agent：選目標 → 狀態機 → AI → 移動"]
-    J --> K["四人分離、敵隊命中檢查、整隊勝負判定"]
-    K --> L["MapPanel.paintComponent() 重繪"]
-    F -->|"MENU / Esc"| B
+主選單 → 遊玩 → 實驗 3v3 比賽
+→ 編輯六名選手
+→ 開始 → MODERN_3V3 Groupfight（包含 3v2、3v1、2v2、2v1、1v1 轉換）
 ```
 
-`DuelSimulation` 不依賴 `MapPanel`，所以可以不建立 Swing 視窗而直接大量模擬。不過目前 `Musketeer` 仍包含 `paint()`，而 `DuelSimulation.reset()` 也使用 `java.awt.Color`；因此模型與顯示尚未完全拆成兩個模組，只是戰鬥推進本身不需要 Swing 元件。
+介面可切換繁體中文與法文，模擬速度有 `0.25×`、`0.5×`、`1×`、`2×`、`4×`。
 
-## 檔案與職責
+## 2. 現代 2v2 的核心狀態
 
-| 檔案 | 主要職責 |
-| --- | --- |
-| `Main.java` | 在 Swing EDT 管理單一 `JFrame`，切換主選單、模式、隊伍建立與戰鬥頁 |
-| `MenuPanel.java` | 主選單與「開始遊戲／2v2 友誼賽」頁面、語言、返回及離開動作 |
-| `SetupPanel.java` | 兩個隊名、藍紅分頁、四張玩家表單、返回、語言及中法驗證訊息 |
-| `PlayerEditorPanel.java` | 單一玩家的中法標籤、戰術下拉選單和十一個 1–100 數值欄位 |
-| `AgentConfiguration.java` | 綁定玩家名稱、不可變 `AgentStats` 與 `Tactic`，並保存預設設定 |
-| `TeamConfiguration.java` | 綁定隊名與兩份已驗證的 `AgentConfiguration` |
-| `Tactic.java` | 防守、中立、進攻三種戰術的中法標籤及 AI 修正值 |
-| `MapPanel.java` | 計時、暫停、倍速、快捷鍵、語言、返回主選單、競技場與資訊面板 |
-| `DuelSimulation.java` | 建立兩隊、周邊感知、目標選擇、背刺機會、護背、雙重格擋、AI、移動、碰撞、傷害與整隊勝負 |
-| `Musketeer.java` | Agent 隊伍、目標、各敵人感知表、雙重格擋、即時狀態、刺刀幾何、攻擊時間與外觀繪製 |
-| `OpponentAwareness.java` | 單一敵人的可見性、最後位置、記憶時間，以及已觀察的上下攻擊／格擋次數 |
-| `AgentStats.java` | 十一項不可變能力值，以及護背、感知、雙重格擋、交戰、假動作與變速刺的衍生計算 |
-| `EngagementPhase.java` | 試探、承諾進攻、穿越、脫離與重整五段空間循環 |
-| `AttackManipulation.java` | 當次攻擊使用一般刺、加速刺或延遲刺 |
-| `CombatState.java` | Agent 目前處於哪個戰鬥階段 |
-| `Decision.java` | AI 目前想執行的動作及中法文字 |
-| `CombatDirection.java` | 上下段攻擊的距離、時間、顏色與符號 |
-| `BlockDirection.java` | 上、下、側面格擋及方向配對 |
-| `ChamberType.java` | 一般、完美或無 Chamber 的類型 |
-| `HitZone.java` | 頭、軀幹、腿部的高度區間 |
-| `DezoneMovement.java` | dézonage 的後退、斜進與繞行模式 |
-| `DezoneStance.java` | dézonage 時保持中立、格擋或攻擊 |
-| `UiLanguage.java` | 法文／中文文字選擇 |
+四人都存活時，只建立一個包含四人的 `EngagementType.GROUP_2V2`，不是兩場互不相干的
+1v1，也不是四人共用同一條圓形軌道。藍隊與紅隊各自保存一個 `TeamManeuver`，所以可以出現：
 
-## 程式入口與固定時間步進
+```text
+藍隊：COMPRESS
+紅隊：ROTATE_RIGHT
+```
 
-### `Main.main()`
+第一人死亡後，`EngagementManager` 會中止 `GROUP_2V2` 並建立真正的 `TWO_VS_ONE`。
+原本已驗證的 `FIX/FLANK/SURVIVE`、上下雙重威脅、Double Block、背刺及防守者脫離邏輯
+沒有因這次重構而改動。
 
-`Main` 使用 `SwingUtilities.invokeLater()`，確保唯一的 Swing 視窗由 Event Dispatch Thread 建立：
+## 3. 主要類別與責任
+
+### `DuelSimulation`
+
+戰鬥引擎本體，負責：
+
+- 每個 tick 更新時間、感知與狀態；
+- 選目標與做決策；
+- 計算團隊及個人移動向量；
+- 套用加速度、慣性、後退減速、碰撞與邊界；
+- 推進攻擊、格擋、Chamber、恢復；
+- 執行刺刀尖端與身體部位的碰撞判定；
+- 產生決策、命中與死亡的證據。
+
+### `GroupEngagement`
+
+保存四名 Agent、藍紅隊中心、全體中心、配對、報復與反掩護資料，以及：
 
 ```java
-SwingUtilities.invokeLater(() -> new Main().start());
+TeamManeuver blueManeuver;
+TeamManeuver redManeuver;
 ```
 
-`Main` 的 `window` 欄位保存同一個 `JFrame`。`showMainMenu()`、`showPlayMenu()`、`showSetup()` 和 `showCombat()` 都只建立目前需要的 panel，再交給同一個方法：
+`team(Team)`、`opponents(Team)`、`teamCenter(Team)`、`enemyCenter(Team)` 將隊伍判斷集中在
+實體方法內，避免各處重複寫藍紅分支。
+
+### `TeamManeuverType`
+
+```text
+HOLD_LINE
+ROTATE_LEFT / ROTATE_RIGHT
+PRESS_FORWARD / GIVE_GROUND
+SHIFT_LEFT / SHIFT_RIGHT
+COMPRESS / EXPAND
+CROSS_COVER
+RECOVER_FORMATION
+```
+
+### `TeamManeuver`
+
+這是持續存在的團隊意圖，不是單一 tick 的指令。它保存：隊伍、種類、開始時間、最短／偏好／
+最長持續時間、開始時雙方中心、方向、內外側選手、信心與主要理由。
+
+### `TeamManeuverAssessment`
+
+保存某個候選動作的幾何評估：互相掩護、側向空間、前方壓力、敵方威脅、邊界安全、隊形品質、
+攻擊線潛力、總分與拒絕理由。它只評估，不直接改變物理狀態。
+
+### `LocalManeuver`
+
+保存個人的短期修正，例如停住、左右移、斜進、斜退、重新靠近隊友、避開主要或次要刺刀線、
+建立攻擊線。它現在是 `TeamManeuver` 上的局部修正，不再是四人移動的主引擎。
+
+### `Pos`
+
+位置和向量統一由 `Pos(x, y)` 表示。加減、縮放、除法、內積、長度和角度都是 `Pos` 的實體方法，
+因此戰術程式不需要一直傳遞鬆散的 `x`、`y`。
+
+## 4. 團隊動作如何被選出
+
+`updateTeamManeuvers()` 每次先判斷現有動作是否仍需持續。每隊獨立處理，紅隊不會複製藍隊選擇。
+
+用兩名隊員的決策及團隊能力得到 `0～1` 的品質 `q`：
+
+```text
+最短時間 = 0.70 + 0.40q 秒
+偏好時間 = 1.40 + 1.10q 秒
+最長時間 = 3.00 + 1.00q 秒
+```
+
+最短時間以前，除非發生真正危險，否則不換動作。超過偏好時間才重新評估；超過最長時間後，
+重複同一動作會扣分，避免永遠卡在相同行為。
+
+`assessTeamManeuver()` 的共同分數為：
+
+```text
+共同分數 = 0.20 × 掩護保持
+         + 0.18 × 側向空間
+         + 0.14 × 邊界安全
+         + 0.16 × 隊形品質
+         + 0.14 × 攻擊線潛力
+```
+
+再加上各種類的條件：遠距離偏向 `PRESS_FORWARD`、近距離且受威脅可 `GIVE_GROUND`、隊友過遠
+偏向 `COMPRESS/RECOVER_FORMATION`、間距太小而有兩條攻擊線時偏向 `EXPAND`。
+
+程式會加入受決策能力限制的微小誤差。最後只在接近最高分的選項內抽選：
+
+```text
+候選窗 = 0.10 + 0.18 × (1 - q)
+權重   = exp((候選分數 - 最高分) / 0.10)
+```
+
+因此高能力 Agent 較一致，低能力 Agent 較可能選擇「仍可行但不是最好」的方案。亂數由 seed 控制，
+同 seed 的每次重播仍完全一致。
+
+## 5. 中斷與防止 Thrashing
+
+下列狀況可立刻中斷團隊動作：攻擊交換、Revenge、Counter-cover、Block stun、即將撞牆、隊友嚴重
+分離、敵人穿進兩名隊友之間、死亡、進入 `TWO_VS_ONE`。
+
+如果只是隊形危機，程式不會每一 frame 重新建立同一個動作：
+
+```text
+隊友分離 → RECOVER_FORMATION
+敵人穿線 → COMPRESS
+```
+
+修正後的 500 seeds 中，engagement、target、intent 與 primary mark thrashing 全部都是 `0`。
+
+## 6. 雙人旋轉的幾何
+
+`teamManeuverVelocity()` 先算：
+
+```text
+teamCenter  = 兩名隊友位置平均
+enemyCenter = 兩名敵人位置平均
+forward     = normalize(enemyCenter - teamCenter)
+lateral     = perpendicular(forward) × 動作方向
+```
+
+這裡沒有用四人共同中心產生推進力，所以不是舊式全體公轉。
+
+旋轉開始時會決定內外側：較靠近 groupfight 中心的是內側；距離相同時，依轉向上的位置判定。
+角色在同一個 `TeamManeuver` 期間保持不變，避免每 tick 互換。
+
+基準速度：
+
+```text
+外側：側向 0.76 m/s，向前 0.12 m/s
+內側：側向 0.37 m/s，向前 0.15 m/s
+步法倍率 = 0.82 + 0.002 × footwork
+```
+
+在沒有刺刀、碰撞或邊界危險時，要求的側向投影約為外側 `0.62 m/s`、內側 `0.42 m/s`。
+這只是期望速度，之後仍會經過加速度、慣性、後退 `0.62` 倍減速、速度上限及碰撞處理。
+500 seeds 的非緊急實際平均為外側比內側快 `0.135 m/s`。
+
+## 7. 速度如何合成
+
+`modernGroupVelocity()` 明確建立六個部分：
+
+```text
+teamManeuverVelocity
+localManeuverVelocity
+formationVelocity + partnerVelocity
+weaponAvoidanceVelocity
+collisionVelocity
+boundaryVelocity
+```
+
+一般 `LocalManeuver` 乘上 `0.58`，避免重新壓過團隊方向；若是可信的刺刀線逃離則保留完整強度。
+
+優先順序：
+
+```text
+即將撞牆或碰撞
+→ 即將命中的攻擊
+→ 格擋、Revenge、Counter-cover
+→ 刺刀線閃避
+→ 個人修正
+→ 團隊動作
+→ 隊形修正
+```
+
+所以 `ROTATE_RIGHT` 不會阻止格擋，也不會阻止第四名玩家的威脅反應。
+
+## 8. 真正的停頓
+
+`LocalManeuverType.HOLD_POSITION` 的持續範圍是 `0.18～0.42 秒`。當 Agent 主動 Hold 時，
+自己的團隊推進和普通隊形修正會暫停，但刺刀、碰撞或邊界危險仍可強制移動。
+
+統計分開記錄：
+
+```text
+intentionalHoldDuration      主動選擇停住
+incidentalLowSpeedDuration   慣性或幾何造成的低速
+```
+
+最終 500 seeds 分別是 `13.233 秒` 與 `14.783 秒`，不再把只有一兩個 frame 的低速誤認成可見停頓。
+
+## 9. 攻擊與身體碰撞
+
+攻擊仍經過：
+
+```text
+ATTACK_PREPARE → ATTACK_HOLD（可省略或持續）
+→ ATTACK_ACTIVE → RECOVERY
+```
+
+上刺範圍較大，下刺較快；身體垂直角度會改變準備、有效與恢復時間，左右 yaw 會改變刺刀線。
+後退比前進慢。Agent 不會永遠正面相對，可以側移、繞行、Hold 中移動或脫離區域。
+
+命中必須是刺刀尖端掃過實際身體區域：頭部小、軀幹大、腿部常代表刺得過長或瞄準誤差。
+格擋必須方向、時間和幾何都正確。背後攻擊不能向後格擋，只能靠感知、轉身、步法與隊友保護。
+
+這次重構沒有增加攻擊加成，也沒有縮短準備時間或放寬距離。所有普通刺擊仍須通過
+`assessAttackOpportunity()` 與 `TeamAttackArbitration`。
+
+## 10. 能力值如何影響程式
+
+技術能力：
+
+- `footwork`：速度控制、旋轉品質、後方保護與團隊動作倍率；
+- `distanceControl`：感知距離誤差與出手距離判斷；
+- `attackTiming`：出手窗口、Chamber/操控的執行品質；
+- `defenseTiming`：格擋啟動與方向切換；
+- `chamber`、`doubleBlock`：特殊防守的成功窗口。
+
+心理與認知能力：
+
+- `aim`：刺刀方向和身體部位誤差；
+- `reaction`：發現威脅到開始反應的延遲；
+- `decisionMaking`：候選評分誤差、團隊動作穩定度與目標選擇；
+- `teamwork`：掩護、隊友距離與團隊選擇品質。
+
+性格能力不直接代表強弱，只改變偏好：
+
+- `aggression`：主動施壓和攻擊傾向；
+- `zoneExit`：脫離目前區域或換目標的傾向；
+- `fiftyFifty`：願不願意接受同時出手；
+- `pressure`：用 Hold、角度與步法逼迫對手格擋。
+
+能力值不會直接寫成命中百分比。它們改變「看到什麼、多久反應、估計多準、選哪個可行方案」，
+最後結果仍由實際位置與時間決定。
+
+## 11. 證據、Trace 與死亡原因
+
+`AttackOpportunityEvidence` 在 commit 時凍結觀察資料：身體／武器角度、狀態、剩餘時間、刺刀線、
+進線速度、ETA、掩護與信心。`TARGET_MOVING_INTO_LINE` 必須真的預測到目標穿越刺刀走廊；沒有證據
+就不會用這個理由攻擊。
+
+`DecisionTrace` 現在分開記錄：
+
+```text
+TEAM_MANEUVER
+LOCAL_MOVEMENT
+ATTACK / ATTACK_REJECTION
+BLOCK
+REVENGE / COUNTER_COVER
+TARGET_ATTENTION
+TWO_VS_ONE_COORDINATION
+```
+
+`KillCausalChain` 也分開保存團隊動作與個人動作：
+
+```text
+TeamManeuver
+→ LocalManeuver
+→ 攻擊決策
+→ 被攻擊者反應
+→ 隊友掩護決策
+→ 實際命中／格擋／死亡
+```
+
+找不到的事件會明確寫成 `NONE_OBSERVED`，不會在死亡後反推一個不存在的原因。
+
+## 12. 畫面與視覺驗證
+
+戰術 debug 會顯示藍紅隊目前 `TeamManeuver`、內外側選手、持續時間與速度貢獻。產生標準驗證圖：
+
+```powershell
+java -cp .\out VisualValidationCapture 41 73 119
+java -cp .\out VisualValidationCapture --representative
+```
+
+每個 `out/visual-validation/seed-N/` 包含：
+
+- `contact-sheet.png`：1× 速度下的 16 個畫面；
+- `trajectories.png`：第一人死亡以前的四條軌跡；
+- `timeline.txt`：團隊／個人動作、角色、持續時間、原因；
+- `decisions.txt`：攻擊機會與凍結證據；
+- `first-kill.txt`：死亡解釋與因果鏈；
+- `motion.txt`、`suspicions.txt`：移動稽核。
+
+舊的平淡版本約為團隊偏向 `8.2%`、個人微動 `61.4%`。目前混合版本為：
+
+```text
+團隊動作 39.8%
+個人修正 27.9%
+隊形修正 19.9%
+碰撞與邊界 12.2%
+```
+
+## 13. 最終 500 seeds 結果
+
+```powershell
+java -cp .\out FinalAcceptanceTest 500
+```
+
+```text
+500/500 完成
+timeout / stalemate / thrashing = 0
+無效位置 / 離開競技場 = 0
+舊系統啟動 = 0
+決定性重播失敗 = 0
+500/500 第一個死亡都有 KillCausalChain
+
+TeamManeuver 開始次數：4052
+ROTATE_LEFT / RIGHT：1117 / 1162
+PRESS_FORWARD / GIVE_GROUND：519 / 23
+COMPRESS / EXPAND：345 / 90
+CROSS_COVER / RECOVER_FORMATION：14 / 768
+累計側向距離：3556.485 m
+隊形面積變化：5194.712
+
+第一死因：普通攻擊 415、Revenge 84、Chamber 1
+Revenge：1005 次機會、104 次 commit、84 次擊殺
+死亡後 TWO_VS_ONE：500/500
+```
+
+## 14. 測試指令
+
+```powershell
+java -cp .\out TeamManeuverTest
+java -cp .\out ModernGeometryTest
+java -cp .\out ModernGroup2v2Test
+java -cp .\out TwoVsOneCoordinationTest
+java -cp .\out AttackOpportunityTest
+java -cp .\out DecisionExplanationTest
+java -cp .\out AttributeBehaviorAudit
+java -cp .\out FinalAcceptanceTest 500
+```
+
+`TeamManeuverTest` 包含：單隊旋轉、雙隊不同旋轉、旋轉對壓迫、個人 Hold、刺刀線優先、Shift、
+Compress、Expand、五秒動態場景與同 seed 決定性。
+
+## 15. 舊欄位說明
+
+`LEGACY_2V2` 仍可編譯，部分相容診斷也還保留 `GroupPhase.ROTATE`、舊方向與角速度欄位。
+它們現在只服務舊報表與相容測試，不再替 `modernGroupVelocity()` 產生四人共用切線，請勿把它們
+重新接回現代友誼賽。
+
+## 16. 實驗 3v3 里程碑 1：團隊移動核心
+
+3v3 使用獨立入口，不會改變既有 `MODERN_2V2`：
+
+```powershell
+java -cp .\out Main modern-3v3 41
+java -cp .\out Main controlled-3v3 41
+```
+
+### 建立六名玩家的程式流程
+
+`TeamConfiguration3` 將隊名與三份 `AgentConfiguration` 包在同一個物件中。主選單的
+「實驗 3v3 比賽」會開啟六份 `PlayerEditorPanel`，因此姓名、戰術和全部能力都能在開戰前
+修改。按下開始後，`Main.showCombat3()` 將兩個 `TeamConfiguration3` 交給 `MapPanel`；
+`MapPanel` 再建立 3v3 專用的 `DuelSimulation`。
+
+`resetExperimental3v3()` 生成六個 `Musketeer`，但只向 `EngagementManager` 登記一個
+`EngagementType.GROUP_3V3`。這點很重要：目前的 3v3 不是把 A1/B1、A2/B2、A3/B3 拆成三場
+互不相干的 1v1。一般畫面也不畫三條固定 target 線；只有開啟 debug 才顯示觀察資訊。
+
+### `TeamFormation3` 如何由位置求角色
+
+每隊各有一個 `TeamFormation3`。它先用三個 `Pos` 求平均中心，再把「我方中心指向敵方中心」
+正規化成 `forward`，並以垂直向量建立 `lateral`。每名玩家的位置減掉隊伍中心，再和
+`lateral` 做 dot product：投影最小者是 `LEFT`、中間者是 `CENTER`、最大者是 `RIGHT`。
+所以角色會隨真實站位交換，不是出生時寫死的編號。
+
+程式還加入兩層防抖：角色至少維持 `0.55–0.90 秒`，而候選者必須跨過約 `0.30 公尺` 的
+空間差才交換。維持時間受決策與團隊能力調整。這能保留真正的交叉換位，同時避免兩人投影
+非常接近時，每個 tick 不斷互換左右角色。
+
+隊形同時量測：
+
+- `width`：三人在側向軸上的最大投影差；
+- `depth`：三人在前向軸上的最大投影差；
+- `cohesion`：左右翼和中間選手是否接近約 `1.35 m` 的理想間隔；
+- `center`、`forward`、`lateral`：之後所有團隊移動共用的 `Pos` 幾何資料。
+
+### 三人如何執行同一個旋轉
+
+藍紅兩隊分別保存自己的 `TeamManeuver`，因此一隊可以 `ROTATE_RIGHT`，另一隊同時
+`PRESS_FORWARD`。旋轉時不會把三人設成相同速度：外側、中央、內側的切向基礎速度分別是
+`0.84 / 0.56 / 0.28 m/s`。之後才疊加步法係數、隊形位置修正、加速度與慣性、後退減速、
+碰撞和邊界 steering。視覺結果是一條會彎曲與重整的三人線，而不是三個角色被鎖在圓形軌道。
+
+`Group3v3Metrics` 記錄隊形寬度、深度、凝聚度、角色交換、防抖失敗、團隊動作次數，以及
+旋轉時外側和內側的實際切向速度差。這些統計只觀察結果，不反過來控制 AI。
+
+### 為何目前不能攻擊
+
+里程碑 1 的目的只驗證六人幾何與連續移動。`DuelSimulation.update()` 遇到 3v3 scenario 時會
+直接走 `updateExperimental3v3()`；此路徑不呼叫攻擊選擇、格擋、刺刀碰撞或傷害解析。六人
+固定維持 `NEUTRAL / WAIT` 和 100 生命。攻擊機會、死亡，以及
+3v3 陣亡後轉為 2v2/2v1，會在後續里程碑逐步加入；本版沒有假裝這些功能已完成。
+
+### 自動測試與視覺產物
+
+```powershell
+java -cp .\out Experimental3v3Test
+java -cp .\out VisualValidation3v3Capture
+```
+
+`Experimental3v3Test` 驗證：場上只有一個 `GROUP_3V3`、完全沒有攻擊、初始幾何角色正確、
+小幅交叉不會洗牌、持續且明顯的交叉會換位、兩隊動作互相獨立、旋轉實際速度符合
+外側 > 中央 > 內側，以及相同 seed 完全可重播。另以 `Modern2v2Test`、`TeamManeuverTest`、
+`ModernGroup2v2Test` 保護既有 2v2。
+
+`VisualValidation3v3Capture` 預設輸出 seeds 41、73、119。每個
+`out/visual-validation-3v3/seed-N/` 目錄包含：
+
+- `contact-sheet.png`：前十五格每隔 1 秒取樣，最後一格顯示第一人陣亡；
+- `trajectories.png`：六名玩家的彩色移動軌跡；
+- `formations.txt`：每隊當下的左／中／右角色、寬度、深度、凝聚度與 `TeamManeuver`。
+
+## 17. 實驗 3v3 里程碑 2：有限注意力
+
+每名 Agent 現在各有一個 `AttentionAllocation`。既有 2v1 使用的 `MultiThreatAttention` 沒有被
+修改，因此 3v3 的三層注意力不會暗中改變 `MODERN_2V2` 或 `TWO_VS_ONE`。
+
+### 三層注意力資料
 
 ```java
-private void show(JPanel panel, String title) {
-    window.setTitle(title);
-    window.setContentPane(panel);
-    window.pack();
-    window.setLocationRelativeTo(null);
-    window.setVisible(true);
-    panel.requestFocusInWindow();
-}
+Musketeer primaryThreat;
+Musketeer secondaryThreat;
+Musketeer peripheralThreat;
+
+double primaryWeight;      // 約 0.50–0.66
+double secondaryWeight;    // 剩餘的主要份額
+double peripheralWeight;   // 約 0.10–0.17
 ```
 
-`MenuPanel.MenuHandler` 把 `MenuAction` 與目前 `UiLanguage` 回傳給 `Main`。`MAIN` 頁的 `PLAY` 進入模式頁；`PLAY` 頁的 `FRIENDLY_MATCH` 進入隊伍建立；`BACK` 返回主選單；`QUIT` 關閉唯一的視窗。這讓 panel 只處理畫面與輸入，不直接建立下一個視窗。
+三個敵人必須互不相同，權重每次都正規化為 `1`。權重不是命中機率，而是分配觀察更新的頻率
+和資料精度。`group3ThreatSalience()` 依距離、視野角度、接近速度、明顯攻擊以及近距離背後威脅
+計算顯著程度。
 
-`SetupPanel.StartHandler` 回傳兩份 `TeamConfiguration`。`showCombat()` 以兩個隊名組成視窗標題，再把兩份隊伍設定直接傳給 `MapPanel`，由戰鬥頁取出四名玩家。戰鬥畫面不是去讀 Swing 輸入框，而是只接收已驗證、不可變的設定物件及語言值。`MapPanel.MenuHandler` 則把戰鬥當下的語言送回 `showMainMenu()`。
+### 為何看見 B2 不會立刻改成 B2
 
-真正的遊戲迴圈不在 `Main`，而在 `MapPanel` 的 Swing `Timer`。
+排名最高的敵人不會直接寫進 `primaryThreat` 或 `target`。普通挑戰者必須比目前威脅高至少
+`0.16`，而且目前注意力已維持 `0.55–0.90 秒`，才會先進入 `pendingPrimary`。接下來還要等待
+約 `0.14–0.38 秒` 的轉向成本；實際長度由反應與決策能力決定。短距離即將命中的攻擊可使用
+`0.08 秒` 緊急延遲，但依然不是瞬間切換。
 
-### `MapPanel.tick()`
+切換完成時才會更新 `primaryThreat`，並在 `precisionPenaltyUntil` 以前保留短暫不確定性。
+次要威脅也有 `0.42 秒` 的防抖和 `0.14` 分數差，避免 Secondary／Peripheral 每個 tick 互換。
+移動與身體朝向只追隨已完成切換的主要威脅，不會追著 `pendingPrimary` 跑。
 
-計時器大約每 16 ms 觸發一次。程式先計算距離上次更新經過的真實秒數，再套用倍速：
+### `OpponentAwareness` 的資料品質
+
+每個敵人的 awareness 現在記錄：
+
+- `attentionLevel`；
+- `observationCooldown` 與觀察次數；
+- `detailConfidence`；
+- `lastObservationTime`；
+- `stateDetailFresh`，代表攻擊／格擋狀態是否真的被辨識。
+
+三層的大致更新週期為：
 
 ```text
-elapsed = min(0.05, 真實經過秒數) × speed
+Primary     0.075–0.125 秒
+Secondary   0.17–0.29 秒
+Peripheral  0.42–0.72 秒
 ```
 
-`0.05` 上限用來避免視窗暫時卡住後，一次把過大的時間交給物理模擬。接著把 `elapsed` 切成不大於約 `1/120 秒` 的小步進：
+Primary 能較準確觀察位置、速度、身體角度、刺刀方向與戰鬥狀態。Secondary 更新較慢、誤差
+較大，只在明顯動作或細節判讀成功時更新狀態。Peripheral 的位置誤差約為基礎值的 `4.60 倍`，
+主要保留最後位置、粗略移動與危險警示；它永遠不直接複製精確的攻擊或格擋狀態，
+`stateDetailFresh` 固定為 false。
 
-```java
-var steps = Math.max(1, (int) Math.ceil(elapsed / (1.0 / 120.0)));
-var dt = elapsed / steps;
-for (var n = 0; n < steps; ++n) simulation.update(dt);
+### 介面、統計與驗證
+
+按 `D` 後會顯示每名 Agent 的 `P/S/R`、三個權重、等待切換的敵人及剩餘時間。左右資訊卡也會
+顯示三層敵人代號。`Group3v3Metrics` 統計 Primary 延遲及完成切換、Secondary 切換、Peripheral
+偵測與平均權重。
+
+```powershell
+java -cp .\out Experimental3v3AttentionTest
+java -cp .\out VisualValidation3v3Capture
 ```
 
-因此 0.25、0.5、1、2、4 倍速只會縮放同一畫面更新之間的模擬總時間，不會故意把碰撞檢查變得更粗糙。慢動作仍使用相同狀態機與碰撞規則，只是每次計時器推進的模擬秒數更少。
+注意力測試 A–E 驗證三層分配、權重正規化、觀察頻率遞減、信心遞減、非瞬間切換、Peripheral
+不會讀取精確狀態，以及相同 seed 的決定性。視覺驗證目錄新增 `attention.txt`。此里程碑的
+隔離測試當時尚未啟用攻擊。
 
-## Agent 資料模型
+## 18. 實驗 3v3 里程碑 3：物理掩護網路
 
-### `AgentConfiguration`
+藍紅兩隊現在各自擁有一個 `CoverNetwork`。它和既有 2v2 的 `CoverAssessment` 分開，沒有修改
+原本 Revenge、Counter-cover 或 `TWO_VS_ONE` 的判定。
 
-一份戰前設定把名稱與能力綁在一起：
+### 為何每隊有 18 個 `CoverLink`
 
-```java
-record AgentConfiguration(String name, AgentStats stats, Tactic tactic) { ... }
-```
-
-compact constructor 會移除名稱前後空白，拒絕空名稱、超過 18 字的名稱、空的 `stats` 或空戰術。`defaultBlue()`、`defaultRed()` 預設使用 `Tactic.NEUTRAL`，也讓無參數 `DuelSimulation()` 和 `MapPanel()` 仍可直接建立測試用決鬥。
-
-### `AgentStats`
-
-能力值使用不可變 `record`：
-
-```java
-record AgentStats(int footwork, int distanceControl, int aim, int attackTiming,
-                  int defenseTiming, int reaction, int aggression,
-                  int decisionMaking, int zoneExit, int chamber,
-                  int doubleBlock) { ... }
-```
-
-`AgentStats` 的 compact constructor 逐項保證數值位於 1–100。欄位順序不可任意交換，因為 `PlayerEditorPanel.configuration()` 會依照這個順序把十一個 `JSpinner` 組成 record。
-
-背部保護仍是由四項既有能力計算出的衍生值，不是新增的第十一項「雙重格擋」：
+每隊有三個可能的保護者。每位保護者可掩護另外兩位隊友，並分別針對三名敵人評估：
 
 ```text
-護背 B = round(0.50 × 步法 + 0.22 × 反應 + 0.18 × 決策 + 0.10 × 脫離原位)
+3 名 protector × 2 名 protectedAlly × 3 名 threateningEnemy = 18
 ```
 
-對應程式是 `AgentStats.backProtection()`。步法占 50%，因為避免露背最主要靠位置、斜進速度與轉身能力；反應決定多久才發現後方威脅；決策影響是否選對安全側；脫離原位則影響離開包夾線的持續時間。資訊卡顯示的「護背」或 `Dos` 就是這個計算結果，設定頁不另外增加 spinner，避免同一項能力被重複計算。
-
-周邊感知同樣不是新 spinner，而是另一個衍生值：
-
-```text
-周邊感知 V = round(0.45 × 反應 + 0.35 × 決策 + 0.20 × 距離控制)
-```
-
-`AgentStats.peripheralAwareness()` 只參與「有沒有注意到第二名敵人」，不會提高攻擊命中率。反應占最大比例，決策代表分配注意力的能力，距離控制則幫助辨認遠處人物的位置。
-
-本次新增三個衍生能力。它們同樣不會直接修改傷害，而是控制 AI 選擇、執行速度與操作幅度：
-
-```text
-交戰能力 E = round(0.35 × 步法 + 0.25 × 距離控制
-                   + 0.25 × 決策 + 0.15 × 攻擊性)
-
-假動作能力 F = round(0.35 × 決策 + 0.30 × 進攻時機
-                     + 0.20 × 攻擊性 + 0.15 × 瞄準)
-
-變速刺能力 M = round(0.35 × 進攻時機 + 0.25 × 瞄準
-                     + 0.20 × 步法 + 0.20 × 決策)
-```
-
-設定頁的預設數值：
-
-| Agent | 步法 | 距離 | 瞄準 | 進攻 | 防守 | 反應 | 攻擊性 | 決策 | 脫離 | 接招 | 雙重格擋 |
-| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| 藍 1 | 78 | 81 | 72 | 70 | 64 | 64 | 58 | 76 | 74 | 74 | 62 |
-| 藍 2 | 68 | 76 | 75 | 66 | 72 | 71 | 63 | 74 | 81 | 67 | 78 |
-| 紅 1 | 55 | 62 | 84 | 68 | 82 | 82 | 72 | 65 | 56 | 93 | 74 |
-| 紅 2 | 74 | 69 | 70 | 79 | 61 | 68 | 81 | 73 | 70 | 64 | 58 |
-
-### `Musketeer` 的欄位分類
-
-`Musketeer` 是每名 Agent 的即時狀態容器。重要欄位可分成以下幾組：
-
-| 類別 | 欄位 |
-| --- | --- |
-| 位置與角度 | `x`、`y`、`previousX/Y`、`angle`、`pitch`、`weaponYaw` |
-| 移動慣性 | `velocityX/Y`、`movementHeading` |
-| 期望角度 | `desiredPitch`、`desiredWeaponYaw` |
-| 狀態與決策 | `state`、`decision`、`stateTime`、`decisionTime` |
-| 交戰計畫 | `engagementPhase`、`engagementTime`、`engagementSide` |
-| 攻防方向 | `attackDirection`、`blockDirection` |
-| 瞄準 | `intendedZone`、`attackHeight`、`aimError`、`attackPitch` |
-| 假動作與守備 | `feintCount`、`feintCooldown`、`queuedAttackDirection`、`guardPrepareTime`、`guardHoldTime`、`guardSwitchCooldown` |
-| 攻擊變速 | `attackManipulation`、`baseAttackPitch`、`manipulationPitchOffset`、`manipulationYawOffset` |
-| 刺刀掃掠 | `previousTipX/Y` 與目前 `tipX()/tipY()` |
-| 生存 | `hitPoints`、`alive`、`lastHitZone`、`lastDamage` |
-| 誘敵 | `baitOffset`、`baitTime`、`baitSequence`、`baitedAttack`、`punishingBait`、`exploitingBait` |
-| dézonage | `dezoneTime`、`dezoneCooldown`、`dezoneMovement`、`dezoneStance`、`dezoneOriginalTarget`、`dezoneSwitchTarget`、`dezoneSwitchCommitted`、`dezoneDangerTime` |
-| 背部保護 | `rearThreat`、`rearReactionTime`、`backExposed`、`backEscapeTime`、`backEscapeDirection` |
-| 敵人感知 | `opponentAwareness`、`perceptionTime`；每名敵人各有 `visible`、`lastKnownX/Y`、`memoryTime` |
-| 背刺機會 | `freeKillAttempt`、`freeKillPerceivedDistance` |
-| Chamber | `chamberType`、`chamberTimingError`、`chamberChain`、`simpleChamberLethal`、獨立的訊息類型與連鎖快照 |
-| 雙重格擋 | `doubleBlockThreat`、`doubleBlockSecondDirection`、`doubleBlockSwitchTime`、`doubleBlockSwitched`、`doubleBlockMessageTime` |
-| 防止重複命中 | `attackResolved` |
-
-`Musketeer` 同時包含模型與 `paint()`。這讓原型較容易直接繪製，但如果未來要建立伺服器或大規模無畫面模擬，最好再把純戰鬥資料與 Swing/AWT 繪圖拆開。
-
-## `CombatState` 與 `Decision` 不相同
-
-這兩個 enum 很容易混淆：
-
-- `CombatState` 表示角色現在客觀上能做什麼，例如正在準備、刺擊、恢復或格擋。
-- `Decision` 表示 AI 這次想做什麼，也用來決定移動方向及顯示資訊面板文字。
-
-例如 Agent 可以同時是：
-
-```text
-state    = ATTACK_HOLD
-decision = DEZONE_ORBIT_LEFT
-```
-
-意思是它客觀上正在保持攻擊，但 AI 的移動意圖是向左繞行脫離。不能只看 `decision` 判斷能否造成傷害，真正有傷害的狀態只有 `ATTACK_ACTIVE` 或 `CHAMBER_ACTIVE`。
-
-## 一次模擬更新做什麼
-
-`DuelSimulation.update(dt)` 的順序是：
+`CoverLink` 是不可變 record，保存：
 
 ```java
-for (var agent : agents) agent.snapshotMotion();
-for (var agent : agents) updateAgent(agent, dt);
-separateAgents();
-for (var attacker : agents) resolveAttack(attacker);
-updateWinner();
+Musketeer protector;
+Musketeer protectedAlly;
+Musketeer threateningEnemy;
+boolean viable;
+double alignEta, prepareEta, contactEta, punishEta;
+double lineSafety, perceptionConfidence, quality;
+String rejectionReason;
 ```
 
-`snapshotMotion()` 必須在任何人移動前一起執行，否則高速刺刀的「前一位置」會混入不同時間點，無法正確建立相對運動掃掠線段。
+`CoverNetwork.rebuild()` 將所有連結放入 `incomingLinks`（誰正在被掩護）和 `outgoingLinks`
+（誰能提供掩護）。`viableRelations` 只保留本 tick 真正成立的關係，用來計算建立與斷裂。
 
-每名 Agent 的 `updateAgent()` 再依序執行：
+### ETA 與幾何公式
 
-1. 扣除受傷、Chamber、雙重格擋成功、誘敵、懲罰、dézonage、背刺提示及護背移動計時。
-2. 如果死亡，停止更新行動。
-3. 每隔一段感知時間呼叫 `updatePerception()`，再由 `updateBackAwareness()` 從已看見或仍記得的敵人中尋找後方威脅。
-4. 減少 `targetLockTime`，呼叫 `selectTarget()` 取得目前能追蹤的敵人。
-5. 增加 `stateTime`，減少決策、假動作、格擋切換及交戰階段計時。
-6. 呼叫 `updateState()` 推進戰鬥狀態，再由 `updateEngagementPlan()` 推進試探／進攻／穿越／脫離／重整。
-7. 決策計時結束時呼叫 `chooseDecision()`。
-8. 呼叫 `moveAndTurn()` 更新 pitch、身體角、刺刀角、速度與位置，再用 `avoidTeammate()` 做隊友避讓。
+連結只讀取保護者的 `OpponentAwareness.lastKnown`。敵人沒有被看見而且記憶已到期時，直接回傳
+`enemy_untracked`，不會偷看真實座標。
 
-AI 並不是每一個 120 Hz 物理步進都重新抽動作。每次決策後會設定：
-
-```text
-decisionTime = 0.10 + U(0, 0.035) 秒
-```
-
-因此決策間隔約為 0.10–0.135 秒，而移動、轉身與碰撞仍以更細的物理步進執行。
-
-## 第二名敵人的周邊感知與短期記憶
-
-原本的 2v2 AI 可以直接讀取兩名敵人的真實座標與戰鬥狀態，等於擁有 360° 全知視野。現在每名 `Musketeer` 使用 `IdentityHashMap<Musketeer, OpponentAwareness>` 保存對兩名敵人的獨立認知；感知抽樣間隔是：
-
-```text
-perceptionTime = 0.25 + U(0, 0.08) 秒
-```
-
-### 角度係數
-
-令 `α` 為敵人方向與自己身體 `angle` 的絕對差，單位為度。`perceptionAngleFactor()` 使用連續分段函數：
-
-```text
-0° ≤ α ≤ 60°   : A = 1.00 - 0.15 × α / 60
-60° < α ≤ 115° : A = 0.85 - 0.55 × (α - 60) / 55
-115° < α ≤ 180°: A = 0.30 - 0.24 × (α - 115) / 65
-```
-
-因此正前方由 `1.00` 緩降到 `0.85`，側面再降到 `0.30`，正後方最低為 `0.06`。這不是三個突然跳動的視野開關，而是角度越偏越難發現。
-
-### 距離、能力與注意力
-
-距離係數與能力係數是：
-
-```text
-D = clamp(1 - max(0, 距離 - 1.5) / 4, 0.12, 1)
-S = 0.45 + 0.0055 × 周邊感知 V
-```
-
-正在專注的 `target` 不套用第二敵人懲罰。其他敵人若自己目前的直接目標在 `2.1 m` 內或正在攻擊，注意力係數只有 `0.45`；否則是 `0.72`。基礎發現率為：
-
-```text
-P基礎 = 角度係數 A × 距離係數 D × 能力係數 S × 注意力係數
-```
-
-已在上一輪看見會加 `0.18`，正在攻擊加 `0.28`，有移動意圖但沒攻擊加 `0.06`。最後還有兩個近距離下限：
-
-- `1.6 m` 內且不在背後：至少 `82%`；
-- 目前鎖定目標且不在背後：至少 `96%`。
-
-結果最後限制在 `2%–99%`。因此 1.5 m 的側面敵人通常看得到；4 m 的第二敵人若位於側面，而且自己正忙著應付近距離直接對手，可能連續幾次都沒有被發現。若他開始攻擊，動作會讓辨識率上升，但仍不是全知警報。
-
-### 失去視線後的記憶
-
-成功看見敵人時，程式保存帶有誤差的最後位置：
-
-```text
-位置誤差 σ = 0.01 + (100 - 距離控制) × 0.003 + (1 - A) × 0.08 m
-記憶時間 = 0.55 + (反應 + 決策) / 200 × 1.30 秒
-```
-
-`visible = true` 時，戰鬥仍使用眼前位置；抽樣失敗後，`knownX()`／`knownY()` 只能回傳 `lastKnownX/Y`。AI 可以短暫朝記憶位置轉身或移動，卻看不到敵人目前是否正在攻擊、恢復、誘敵或 dézonage。記憶歸零後，該敵人不再進入目標評分，直到重新被發現。
-
-## 2v2 隊伍、目標選擇與隊友避讓
-
-`DuelSimulation` 保存 `blueTeam[2]`、`redTeam[2]` 與包含四人的 `agents[4]`。`Musketeer.team` 是 `BLUE_TEAM` 或 `RED_TEAM`，`Musketeer.target` 則是目前鎖定的敵方 Agent。所有攻防決策仍只對一個明確目標運作，但目標不是永久固定。
-
-### 威脅優先換目標
-
-`selectTarget()` 只對 `visible = true` 的敵人讀取準備、保持、Chamber 或釋放攻擊等即時狀態。若看見敵人的刺刀朝向自己，而且距離已進入其預計刺擊長度加安全邊界，該敵人會被視為立即威脅。自己處於 `NEUTRAL` 或 `BLOCKING` 時，已被發現的正面或側面威脅可以跳過一般鎖定時間，強制成為新目標。
-
-後方威脅不直接套用這個換目標規則。只要還有「能追蹤的」正面敵人，`selectTarget()` 就跳過記憶中位於身後的候選者，也不會為了追蹤背後攻擊者突然旋轉 180°。護背移動期間則保留目前仍能追蹤的正面目標。只有正面已沒有可追蹤敵人時，Agent 才能把後方敵人設成目標並正常轉身面對他。
-
-沒有立即危險時，每名候選敵人的基礎分數是實際距離，分數越低越優先。程式再套用：
-
-- 敵人處於 `RECOVERY` 或 `BLOCK_STUN`：減少 0.65，鼓勵攻擊破綻；
-- 敵人正鎖定自己：減少 0.18；
-- 敵人正在攻擊隊友：依 `decisionMaking` 額外降低分數，形成支援；
-- 隊友已鎖定該敵人：高決策能力會略微鼓勵集火；
-- 加入與 `101 - decisionMaking` 成比例的高斯誤差，使低決策 Agent 較容易選錯對象。
-
-一般換目標後會鎖定：
-
-```text
-targetLockTime = 0.55 + decisionMaking × 0.008 秒
-```
-
-鎖定時間避免每 0.1 秒在兩名敵人間抖動。目標死亡時不受鎖定時間限制；處於中立的 Agent 會改選仍可見或仍記得的敵人，若另一人尚未被發現則會暫時失去目標。正在出招或恢復者先完成既有動作，避免刺刀在攻擊途中瞬間轉向。畫面上的淡色虛線由 `paintTargetLines()` 繪製：圓形終點是正式目標，換目標 dézonage 期間額外出現的方形終點只是計畫目標。資訊卡顯示的是觀戰者看到的真實目標距離，不代表 AI 同時擁有無誤差距離。
-
-### 隊友避讓與四人碰撞
-
-`avoidTeammate()` 在隊友距離小於 1.05 m 時加入遠離隊友的位移，其強度隨距離縮短而增加。這是主動轉向之外的局部避讓；之後 `separateAgents()` 逐對處理四名存活 Agent 的柔性碰撞：
-
-```text
-舒適距離 = 2 × BODY_RADIUS
-柔性修正 = (舒適距離 - 實際距離) × 0.18
-硬下限 = 1.18 × BODY_RADIUS
-法線方向閉合速度只消除 28%
-```
-
-因此兩個圓進入舒適區時不會被瞬間彈回完整直徑，能在穿越與側身時短暫貼近；只有低於硬下限才強制推開。死者不再阻擋其他人。
-
-攻擊只對 `opponentsOf(attacker)` 的兩名敵人做碰撞，不會傷害隊友。`resolveAttack()` 會找出身體最靠近刺刀掃掠線段的敵人，因此刺刀仍能實際碰到不是目前目標的對手；命中後 `attackResolved` 隨即防止同一刺擊重複傷害多人。Chamber 額外要求 `defender.target == attacker`，背刺則明確禁止格擋與 Chamber。
-
-### 背刺的實際幾何判定
-
-背刺不是額外抽一次命中率。刺刀尖端仍必須在有效期進入身體圓，攻擊高度也必須落在頭、軀幹或腿的有效區間。通過這兩個條件後，`checkHit()` 才用防守者的身體角判斷攻擊者是否在背後：
-
-```text
-θ攻擊者 = atan2(攻擊者.y - 防守者.y, 攻擊者.x - 防守者.x)
-β = abs(normalizeAngle(θ攻擊者 - 防守者.angle))
-β ≥ 115° → 背刺
-```
-
-`angle` 是身體朝向，不是刺刀的 `angle + weaponYaw`。因此把槍偏向左右不等於身體已經轉過去，也不能用一把向後彎的刺刀保護背部。命中瞬間一旦符合 `β ≥ 115°`：
-
-1. 略過 `CHAMBER_PREPARE` 判定；
-2. 略過 `BLOCKING` 的方向與 75° 朝向判定；
-3. 顯示 `BACKSTAB !`／「背刺！」；
-4. 使用原本部位傷害。頭部仍是 100，軀幹仍是 95% 造成 100、5% 造成 50，腿部仍是 40。
-
-所以背刺保證「無法從背後格擋或接招」，但不憑空把刺偏或刺中腿的錯誤改成固定秒殺。這保留了實際距離、刺刀方向、時間與身體部位的重要性。
-
-### 可利用但不保證成功的 `FREEKILL` 背刺機會
-
-`findFreeKillTarget()` 讓 Agent 主動利用另一名敵人露背的瞬間，但「FREEKILL」在程式中代表高價值機會，不是跳過能力與碰撞直接刪除敵人。候選者必須同時符合：
-
-1. `visible = true`，Agent 現在真的看見他；
-2. `isRearAttack(candidate, self)` 成立，代表自己位於候選者身後至少 115°；
-3. 候選者位於自己刺刀方向 100° 內，準備時間足以轉入攻擊軸；
-4. 帶距離控制誤差的候選者距離不超過 `UP.thrustLength + BODY_RADIUS + 0.10`；
-5. Agent 相信原本的直接對手離得夠遠，不能在自己承諾刺擊時立刻懲罰。
-
-兩次距離閱讀都使用既有誤差：
-
-```text
-估計距離 = 實際／最後已知距離 + N(0, (100 - 距離控制) × 0.006)
-```
-
-直接對手的危險距離是：
-
-```text
-基礎危險距離 = 對手 projectedThrustLength + BODY_RADIUS + 0.55
-看見對手正在攻擊：再加 0.35 m
-看見對手正在恢復或 BLOCK_STUN：減少 0.30 m
-```
-
-只有 `估計直接對手距離 > 危險距離` 才被視為安全。低距離控制 Agent 可能把太遠的背部目標誤判成刺得到，也可能把仍能懲罰自己的直接對手誤判成夠遠。
-
-看見安全機會後，每次決策的使用傾向由決策、距離控制及攻擊性組成：
-
-```text
-F = (0.45 × 決策 + 0.35 × 距離控制 + 0.20 × 攻擊性) / 100
-P(使用機會) = min(0.24, (0.01 + 0.14 × F²) × 戰術倍率)
-
-防守倍率 0.75；中立 1.00；進攻 1.25
-```
-
-高能力 Agent 會更快抓住短暫窗口，低能力者可能沒有下定決心。開始後，AI 依「自己以為的距離」選擇上下段：超過 `1.42 m` 使用長射程上段，否則用快速下段。`FREE_KILL_BACKSTAB` 在準備完成後立即釋放，不會偷偷前進修正錯誤距離；因此誤判太遠就會真的刺空。
-
-`configureFreeKillAim()` 固定想瞄軀幹，但仍套用原本 `aim` 的水平與垂直誤差。最後結果是：
-
-- 尖端沒進身體圓：完全刺空；
-- 高度低於身體或高於頭部：垂直刺空；
-- 高度落在腿部：只造成 40 傷害；
-- 真正從背後碰到頭或軀幹，而且目標在準備期間沒有轉身：100 傷害；
-- 目標及時轉身使攻擊不再符合背刺：回到普通部位傷害與正面防禦規則。
-
-所以優秀 Agent 在距離正確、直接對手確實很遠時，能把乾淨的背部軀幹刺擊轉成可靠擊殺；能力差的 Agent 仍可能刺偏、刺太短、刺到腿，甚至因錯估直接對手而在出招期間被反殺。
-
-### `updateBackAwareness()`：發現身後敵人
-
-每個物理更新仍會計算 `backExposed` 供觀戰畫面顯示真實紅色危險弧，但 AI 不會讀取這個全知旗標。`rearThreat` 只會從 `visible = true` 或 `memoryTime > 0` 的敵人中選擇，而且後方角度與距離都使用最後已知位置。第一次認知新的後方威脅時，還要等待：
-
-```text
-後方反應延遲 = 0.10 + (100 - 反應) × 0.0032 + U(0, 0.06) 秒
-```
-
-100 反應的延遲是 `0.10–0.16 s`；1 反應約是 `0.417–0.477 s`。若攻擊已進入刺擊長度、刺刀又朝向自己，延遲結束後會立即觸發護背脫離。若敵人尚未攻擊但已在 3.5 m 內，每次 0.10–0.135 秒的決策都有主動處理機率：
-
-```text
-P(主動護背 | 條件成立) = 護背 B / 650
-```
-
-這個機率只決定何時開始處理已看見的包夾，不會決定背刺是否命中。
-
-### 斜前護背與安全朝向
-
-`beginBackEscape()` 不使用後退，因為後退只有 62% 速度而且會被追上。它結束原本的 dézonage，選擇左前或右前，並持續：
-
-```text
-護背時間 = 0.40 + 0.0035 × 步法 + 0.0015 × 脫離原位 秒
-局部移動 = forward 0.55 + sideways ±0.85
-向量長度 ≈ 1.012 × 基礎速度
-```
-
-左右兩個候選位置會比較三件事：離最近「已追蹤」敵人的距離、離場地邊界的空間，以及從候選點看已追蹤敵人的夾角。看不見且記憶已消失的敵人不參與安全路線評分。敵人夾角越小，代表 Agent 越接近從包夾線側面逃出。AI 選中分數較高一側的機率是：
-
-```text
-P(選對較安全側) = 0.30 + 0.0065 × 護背 B
-```
-
-護背 100 時是 95%，低能力者仍可能選錯側。在只有一名後方敵人存活時，身體會逐步轉向他；在前後各有敵人時，`backProtectionFacing()` 讓身體朝兩人的角度中線。若兩人幾乎正好相差 180°，則朝選定脫離側的垂直方向轉。刺刀仍朝目前正面目標，因此 Agent 可以一邊格擋正面威脅、一邊斜前移動，不會用瞬間 180° 交換哪一面背部暴露。
-
-### 整隊勝負
-
-每個物理步進完成所有攻擊後，`updateWinner()` 才檢查兩隊是否還有人存活：
-
-```text
-藍隊全滅、紅隊仍存活 → RED_TEAM
-紅隊全滅、藍隊仍存活 → BLUE_TEAM
-同一步進雙方全滅       → DRAW
-其他情況               → -1，繼續戰鬥
-```
-
-因此第一個擊殺不會結束比賽。只要隊友還活著，剩餘 Agent 會重新選目標並繼續戰鬥。
-
-## 攻擊狀態機
-
-普通攻擊的主要路徑：
-
-```text
-NEUTRAL
-→ ATTACK_PREPARE
-→ ATTACK_HOLD
-→ ATTACK_ACTIVE
-→ RECOVERY
-→ NEUTRAL
-```
-
-保持攻擊另外有兩條假動作分支：
-
-```text
-ATTACK_HOLD → FEINT → ATTACK_PREPARE（改成相反上下段）
-ATTACK_HOLD → FEINT → BLOCK_PREPARE（放棄攻擊並準備格擋）
-```
-
-格擋也拆成 `BLOCK_PREPARE → BLOCKING`。前者只把守備意圖與武器姿勢畫出來，尚不能攔截；進入後者才是真正有效的保持格擋。
-
-`updateState()` 只根據狀態時間處理必然轉換；是否開始攻擊、何時主動釋放、是否格擋則由 `chooseDecision()` 決定。
-
-特殊分支：
-
-- 中計攻擊完成 `ATTACK_PREPARE` 後直接進入 `ATTACK_ACTIVE`，不經過一般保持。
-- 懲罰誘敵的 Agent 在 `ATTACK_HOLD` 不受普通 `HOLD_LIMIT` 強制釋放，而是等敵人進入 `RECOVERY`。
-- 識破後選擇前壓的 Agent 也不受 `HOLD_LIMIT` 強制釋放；它會等真實距離與刺刀角度都正確才出手。
-- dézonage 的格擋會維持到 `dezoneTime` 結束。
-- 攻擊遭格擋後進入 `BLOCK_STUN` 0.18 秒，再進入 `RECOVERY`。
-- Chamber 嘗試走 `CHAMBER_PREPARE`；一般型接住後先進入 `CHAMBER_HOLD`，完美型才會直接進入 `CHAMBER_ACTIVE`。
-
-## 五段交戰循環
-
-`EngagementPhase` 是跨越多次 0.1 秒決策的持續空間計畫，用來消除兩人長期正面站樁：
-
-```text
-PROBE → COMMIT → PASS_THROUGH → DISENGAGE → RESET → PROBE
-```
-
-| 階段 | 時間 | 局部移動 `(forward, sideways)` | 程式目的 |
-| --- | ---: | --- | --- |
-| `PROBE` | 0.45–1.20 s | `(0.28, ±0.74)` | 試探角度，也可能預先準備格擋 |
-| `COMMIT` | 0.65–1.20 s | `(0.88, ±0.52)` | 斜前壓入攻擊距離，預判敵人的短期速度 |
-| `PASS_THROUGH` | 0.26–0.51 s | `(1.00, ±0.58)` | 出手後繼續穿過交戰線，不在原地貼住 |
-| `DISENGAGE` | 0.42–0.80 s | `(0.94, ±0.18)` | 保留跑動方向並把身體轉回威脅；距離達 2.20 m 也會結束 |
-| `RESET` | 0.30–0.78 s | `(-0.18, ±0.72)` | 小幅後退、橫移並重整守備 |
-
-左／右側先用 `movementSpace()` 比較 1.15 m 後的邊界空間，再由交戰能力決定能否執行較佳側：
-
-```text
-E = round(0.35 × 步法 + 0.25 × 距離控制
-        + 0.25 × 決策 + 0.15 × 攻擊性)
-
-P(PROBE → COMMIT)
-= clamp(0.18 + 0.005 × E + 戰術修正, 0.12, 0.86)
-
-進攻 +0.18；防守 -0.12；中立 0
-```
-
-`COMMIT` 期間，瞄準點會使用 `0.06 + 0.0014 × 決策` 秒的敵人速度前置量。`PASS_THROUGH` 與 `DISENGAGE` 使用 `movementHeading` 當移動基準，而身體仍受轉速上限逐漸面向敵人，所以「跑的方向、身體朝向、刺刀朝向」可以同時不同。背刺、正面立即威脅、Double Block 等生命優先條件仍可中斷這個計畫。
-
-## 方向記憶、假動作與守備節奏
-
-每個 `OpponentAwareness` 保存已看見的上／下攻擊與上／下格擋次數，並記錄最新 attack/block sequence。只有真的觀察到新動作才遞增，失去視野時不會偷讀。攻擊方向的分數同時考慮：
-
-- 上段射程與下段速度對目前距離的適合度；
-- 對方現在或過去常用的格擋方向；
-- 自己連續使用同方向的 `directionStreak` 懲罰；
-- 與 `decisionMaking` 相反的選擇雜訊。
-
-所以距離不再固定決定上下段。Agent 可以用重複攻擊建立預期，也可能在看見對手守對方向時改變攻擊。
-
-假動作能力與時間：
-
-```text
-F = round(0.35 × 決策 + 0.30 × 進攻時機
-        + 0.20 × 攻擊性 + 0.15 × 瞄準)
-FEINT 時間 = 0.07 + 0.00125 × (100 - F) 秒
-cooldown = 0.34–0.56 s；最多連續兩次
-```
-
-守備時間由實際能力及戰術決定：
-
-```text
-BLOCK_PREPARE = 0.035 + 0.00115 × (100 - 防守時機) 秒
-BLOCKING 保持 = 0.28 + 0.006 × 防守時機 + U(0, 0.18) + 戰術修正
-
-防守戰術 +0.25 s；進攻戰術 -0.08 s；中立 0
-```
-
-看見相反方向的新攻擊時，`switchGuard()` 令 Agent 短暫回到 `BLOCK_PREPARE`，因此切換過慢仍會被刺中。成功擋下後，守方不會免費瞬間出手；它能在維持守備後，看見對手進入 `RECOVERY` 時選擇 `RIPOSTE`。
-
-## Accel／Drag 的程式模型
-
-```text
-M = round(0.35 × 進攻時機 + 0.25 × 瞄準
-        + 0.20 × 步法 + 0.20 × 決策)
-P(使用變速刺) = min(0.72, 0.08 + 0.0062 × M)
-垂直改變量 = ±(7 + 0.13 × M)°
-水平改變量 = ±(4 + 0.075 × M)°
-```
-
-近距離與進攻戰術提高 `ACCEL` 比重；防守戰術降低它而相對偏向 `DRAG`。Accel 的曲線在攻擊前 32% 很快套用，壓低 pitch 使接觸提早；Drag 前 18% 幾乎不變，再延後提高 pitch/yaw，使接觸時間往後。兩者只改變刺刀幾何，不加命中率或傷害，最後仍須由掃掠碰撞、上下高度及格擋判定。
-
-## AI 決策的優先順序
-
-`chooseDecision(self, enemy)` 是防守型 AI 的核心。它不是把所有動作算成同一張機率表，而是先依重要性排除不合理行動，再在部分分支抽取機率。
-
-主要順序如下：
-
-1. 使用可見位置或最後記憶位置計算距離；只有可見敵人才允許讀取即時攻擊狀態。
-2. 判斷已看見的敵人是否攻擊、刺刀是否朝向自己，以及是否進入威脅距離。
-3. 直接危險且反應時間結束時，先依 `chamber` 決定是否以攻擊接招；沒有選 Chamber 才使用格擋或防守移動。
-4. 已認知的後方攻擊具有生存優先權，必要時執行斜前護背。
-5. 自己已承諾 `FREE_KILL_BACKSTAB` 時完成準備並立即刺出，不再重抽其他動作。
-6. 安全且中立時，檢查是否存在看得見、距離足夠、直接對手夠遠的背刺機會。
-7. dézonage 接近邊界時，中止換位並返回中央。
-8. 看見敵人落入自己的誘敵陷阱時，準備懲罰。
-9. 若自己正在保持攻擊，判斷是否釋放、繼續 dézonage、保持懲罰或繼續前壓誘敵者。
-10. 非 `NEUTRAL` 狀態只更新顯示決策，不重新開始其他動作。
-11. 自己正在誘敵或 dézonage 時，維持原有意圖。
-12. 中立狀態依序處理過近、防守、邊界、誘敵判讀、敵人硬直、跟進 dézonage、開始 dézonage、開始誘敵、接近、試探攻擊或側移等待。
-
-因為分支有順序，所以較前面的生存條件會蓋過後面的主動進攻。這就是「生命至上」的實際程式表現。
-
-## 戰術如何修正 AI
-
-`Tactic` 有 `DEFENSIVE`、`NEUTRAL`、`AGGRESSIVE` 三種。戰術不直接增加能力值或傷害，而是改變 AI 對相同行動的偏好；中立型的所有倍率都是 1，等於原本行為。
-
-| 修正 | 防守 | 中立 | 進攻 |
-| --- | ---: | ---: | ---: |
-| 普通攻擊 Chamber 倍率 | 0.45 | 1.00 | 1.00；容易判讀時 1.30 |
-| 背刺機會使用倍率 | 0.75 | 1.00 | 1.25 |
-| 主動試探攻擊倍率 | 0.45 | 1.00 | 1.80 |
-| dézonage 啟動倍率 | 1.35 | 1.00 | 0.75 |
-| 誘敵啟動倍率 | 0.70 | 1.00 | 1.35 |
-| 正面防守承諾門檻 | +25 | 0 | -10 |
-| 保持攻擊的釋放門檻 | -10 | 0 | +15 |
-| 追擊對手換位 | -25 | 0 | +25 |
-| 識破誘敵後前壓 | -35 | 0 | +35 |
-| 主動接近距離 | 1.95 m | 1.78 m | 1.55 m |
-| 保持攻擊時繼續前壓距離 | 1.65 m | 1.45 m | 1.25 m |
-
-### 防守戰術
-
-防守型把第一次接招反擊機率乘 0.45，所以更常選普通格擋。面對尚未進入有效期的威脅時，`defenseTiming + 25` 讓它更早承諾格擋；這只改變選擇時機，正確上下段仍由真正的 `defenseTiming` 操作曲線判定。
-
-安全時，它把主動攻擊降到 45%、dézonage 提高到 135%，遠距離對手正在硬直時有 70% 繼續等待。一般閒置決策有 55% 為 `WAIT`，其餘主要側移；dézonage 的格擋姿態權重額外增加 40。它仍會在敵人真正露出 `RECOVERY` 且位於 2.02 m 內時反擊，這就是「等待破綻」。
-
-### 進攻戰術
-
-進攻型把主動試探攻擊乘 1.80、誘敵乘 1.35，並降低開始接近的距離門檻，所以更常前壓。敵人遠距離進入硬直時，它不再等待而是直接 `APPROACH`；追擊 dézonage 與識破誘敵後前壓的門檻分別得到 +25、+35。它在自己的 dézonage 中也會把保持攻擊姿態權重增加 40。
-
-「過於簡單的攻擊」在程式中明確定義為：不是誘敵、不是 Chamber 回擊，而且敵人正在 `ATTACK_HOLD`，或已刺出且刺刀左右偏角小於 12°。只有這種容易讀取的普通攻擊，進攻戰術才把 Chamber 意願乘 1.30：
-
-```text
-P(進攻型接招反擊 | 容易判讀) = min(1, chamber / 100 × 1.30)
-```
-
-若來招已經是一般 Chamber，仍會在上述結果之後套用 40%、30%、20%、10%、5% 的連鎖風險係數，所以進攻戰術不會重新造成數十次連續 Chamber。
-
-## 十一項能力如何進入程式
-
-### 共用離散操作曲線
-
-`operationSucceeds(skill)` 使用：
-
-```text
-skill ≤ 10：正確率 = 0.50
-skill > 10：正確率 = 0.50 + 0.499 × (skill - 10) / 90
-```
-
-對應程式：
-
-```java
-double operationAccuracy(int skill) {
-    return skill <= 10 ? 0.5 : 0.5 + 0.499 * (skill - 10) / 90.0;
-}
-```
-
-這條曲線用於需要「成功或失敗」的操作，例如選對攻擊方向、選對格擋方向、瞄準是否正常，以及能否識破誘敵。
-
-### 步法 `footwork`
-
-影響基礎移動、身體轉速、刺刀左右轉速及 pitch 轉速：
-
 ```text
-移動速度 = 1.05 + 0.006 × footwork
-身體轉速 = 2.4 + 0.018 × footwork
-刺刀轉速 = 3.4 + 0.018 × footwork
-pitch 轉速 = 1.2 + 0.012 × footwork
-移動加速度 = 4.6 + 0.045 × footwork
+alignEta   = 刺刀方向誤差 / 預估轉身速度
+prepareEta = 目前狀態仍需的準備時間
+contactEta = max(0, 距離 - 刺刀距離 - 身體半徑) / 預估移動速度
+punishEta  = alignEta + prepareEta + contactEta
 ```
-
-因此步法不是直接讓攻擊命中，而是讓 Agent 更快調整位置、速度與角度。它在交戰能力占 35%、變速刺能力占 20%，也影響穿越時能否選中空間較大的側。識破誘敵後，它同時影響「是否選擇前壓」的機率與真正接近敵人的速度。
-
-### 距離控制 `distanceControl`
 
-一般距離感知先加入常態誤差：
+敵人的 `threatEta` 也以最後已知位置、刺刀角度、距離與狀態計算。`lineSafety` 量測其他隊友到
+「保護者 → 威脅敵人」線段的最小距離，避免所謂掩護其實會刺中或穿過隊友。
 
 ```text
-perceivedDistance = 真實距離 + N(0, σ)
-σ = (100 - distanceControl) × 0.006
+quality = 0.38 × 時間優勢
+        + 0.23 × 刺擊線安全
+        + 0.20 × 感知信心
+        + 0.07 × 與敵人的接近程度
+        + 0.12 × 能否到達被保護隊友
+        + 0.08 × 團隊合作與決策品質
 ```
-
-它也用共用離散曲線決定是否識破誘敵。藍色距離 81 的識破率約 89.37%，紅色距離 62 的識破率約 78.83%。
-
-周邊感知中，距離控制占 20%，而失去視線時的位置誤差也會隨它降低。評估背刺機會時，背部目標與直接對手的距離都使用同一個 `σ = (100 - distanceControl) × 0.006`，所以低能力者可能刺太短或錯估自己是否安全。
-
-### 瞄準精度 `aim`
 
-`configureAim()` 先決定正常瞄準是否成功，再產生水平與垂直誤差。
+下列情況會產生明確拒絕原因：
 
-`configureFreeKillAim()` 也使用完全相同的能力曲線，只把意圖固定成軀幹。高瞄準能讓乾淨背刺穩定落在軀幹；低瞄準仍可能水平刺偏、垂直超出身體，或落到腿部而只造成 40 傷害。
+- 感知信心低於 `0.15`；
+- `lineSafety < 0.12`；
+- 保護者與隊友相距超過 `2.85 m`；
+- `punishEta > threatEta + 0.42 s`；
+- `quality < 0.34`。
 
-預定目標通常是軀幹；上段攻擊嘗試頭部的門檻為：
+### 網路統計如何計算
 
 ```text
-P(選擇頭部 | 上段) = (12 + aim / 5) / 100
-```
+connectivity = viableLinks / 18
 
-基礎高度誤差：
+某玩家的 coverage =
+  對三名敵人各取一條品質最高的 incoming viable link，再求平均
 
-```text
-attackHeight = 目標中心高度 + N(0, 0.025 + (100 - aim) × 0.0045)
+weakestMemberCoverage = 三名隊友中最低的 coverage
 ```
 
-正常瞄準成功時，水平誤差標準差為：
+因此右側翼離隊時，指向右側翼的連結會斷，但左側翼的關係可以繼續存在。中間玩家通常自然有
+較多連結，是因為位置能接觸兩側，不是程式給 Center 隱藏加成。
 
-```text
-σyaw = (101 - aim) × 0.0009 rad
-```
+### 對移動和團隊動作的影響
 
-失敗時可能大幅向下刺到腿，或產生約 0.22–0.60 rad 的左右偏差。
+當下一次 `TeamManeuver` 需要重新選擇時：
 
-### 進攻時機 `attackTiming`
+- `weakestMemberCoverage < 0.10` 優先 `RECOVER_FORMATION`；
+- `connectivity < 0.16` 優先 `COMPRESS`。
 
-保持攻擊時，必須先同時滿足距離與面向條件：
+未被掩護的玩家會得到微弱的回到隊伍中心向量；Center 會略微靠向最弱的側翼。這些向量會和
+原本的慣性、隊形、碰撞及邊界向量相加。旋轉期間只套用 `18%` 掩護修正，避免破壞里程碑 1
+已驗證的「外側 > 中間 > 內側」速度差。
 
-```text
-perceivedDistance < 刺擊距離 + 身體半徑 + 0.18
-刺刀與目標夾角 < 0.30 rad
-```
+### Debug、測試與輸出
 
-之後釋放門檻為：
+`D` 模式只畫每位被保護者最重要的有效連結，不把全部 36 條評估線塞滿畫面。文字會顯示有效
+連結數、connectivity、最弱玩家與 coverage；左右玩家卡也顯示自己的 coverage。
 
-```text
-random.nextInt(140) < attackTiming + decisionMaking / 3
+```powershell
+java -cp .\out Experimental3v3CoverNetworkTest
+java -cp .\out VisualValidation3v3Capture
 ```
 
-它也決定 dézonage 時抽到 `HOLD` 姿態的權重，並參與 Chamber 的時間誤差；此外在假動作能力占 30%、變速刺能力占 35%，會縮短假動作並提高 Accel／Drag 的使用與操作幅度。
+掩護測試 A–E 驗證 18 個候選關係、物理有效連結、單側翼離隊後只局部斷線、網路影響下一個
+團隊動作、Primary/Peripheral 信心差異與決定性。每個視覺驗證目錄新增
+`cover-network.txt`。這組隔離測試仍會關閉攻擊，避免碰撞干擾網路量測。
 
-### 防守時機 `defenseTiming`
+## 19. 實驗 3v3 里程碑 4：攻擊計畫與物理命中
 
-敵人形成直接威脅時，防守時機影響是否優先格擋；真正開始格擋後，又用共用正確率曲線判斷能否選對上下段。失敗時可能選到相反方向或無法攔住刺擊的 `SIDE`。它還直接控制準備與保持時間：
+正式的 `MODERN_3V3` 與 `CONTROLLED_3V3` 現在會攻擊。3v3 使用新的 `TeamAttackPlan`，不修改
+2v2 的 `TeamAttackArbitration`。一份計畫保存零到兩名攻擊者、各自的 `AttackOpportunity`、
+留下的掩護者、兩條線的安全值、恢復風險、理由與建立時間。
 
-```text
-準備 = 0.035 + 0.00115 × (100 - defenseTiming)
-保持 = 0.28 + 0.006 × defenseTiming + U(0, 0.18) + 戰術修正
-```
-
-它也決定 dézonage 時抽到 `BLOCK` 姿態的權重。Chamber 已經不是格擋的一種，所以不再由防守時機決定嘗試率。
+### `AttackOpportunity` 如何讀取三人戰場
 
-### 反應速度 `reaction`
+Agent 只會評估目前的 Primary 與 Secondary。Peripheral 即使對應到真實 Java 物件，也會以
+`LOW_CONFIDENCE_PERCEPTION` 拒絕，避免 AI 偷讀第三名敵人的精確狀態。
 
-反應除了原有正面防守與護背延遲，也占周邊感知的 45%，並和決策共同延長失去視線後的敵人位置記憶。
+攻擊候選先使用 awareness 的最後位置計算：
 
-第一次發現直接威脅時設定：
-
 ```text
-reactionTime = 0.10 + (100 - reaction) × 0.0045 + U(0, 0.07)
+impactEta = 對準時間 + 準備時間 + 接觸時間 + 0.04
+lineSafety = 兩名隊友到「攻擊者 → 目標」線段的最小安全程度
 ```
-
-每次 AI 決策會扣除 0.10 秒；歸零後，`NEUTRAL` Agent 才能正式開始格擋或閃避。
-
-### 攻擊性 `aggression`
 
-普通試探攻擊每次符合距離條件時使用：
+`OpposingCoverSummary` 再從目標隊伍的 `CoverNetwork` 找出「保護此目標、針對此攻擊者」的
+有效連結。保護者還必須被攻擊者看見或記得，否則不會進入摘要。
 
 ```text
-P(試探攻擊) = floor((aggression + decisionMaking) / 3) / 1000
+fastestCoverer
+fastestPunishEta
+secondPunishEta
+credibleCoverers
+combinedRisk
 ```
 
-跟進敵人的 dézonage 時，它與決策能力共同決定追擊機率；識破誘敵後，它也和步法、決策能力共同決定是否冒險前壓。背刺機會的使用分數中，攻擊性占 20%。它另占交戰能力 15%、假動作能力 20%，因此高值會較常承諾進攻及變向欺騙，但仍不增加刺刀的物理傷害。
+第一名保護者的 ETA 和攻擊者「命中 + 恢復」時間比較。第二名最多增加自己風險的 `35%`，不會
+把所有敵人危險直接相加。攻擊者自己的 coverage 最多可降低 `42%` 最終 Revenge 風險。
 
-### 決策能力 `decisionMaking`
+拒絕條件包含：超出實際刺刀範圍、隊友擋線、信心低於 `0.32`、武器誤差超過 `48°`、敵方
+掩護更快、攻擊窗口不足或決策分數太低。
 
-決策能力同時影響：
+### 為什麼最多只能兩人攻擊
 
-- 周邊感知 35%、敵人位置記憶時間，以及背刺機會使用分數 45%；
+計畫會排序每名 Agent 的最佳機會。第二名攻擊者只有在下列條件全部成立時加入：
 
-- 能否綜合距離、對手守備記憶及自身重複模式選擇上段或下段。
-- 保持攻擊後的釋放門檻。
-- 普通試探攻擊頻率。
-- 誘敵與 dézonage 的啟動門檻。
-- 識破誘敵後是否選擇前進到實際攻擊距離。
-- Chamber 的時間誤差；它不直接代替獨立的 `chamber` 嘗試率。
-- 跟進對手換位的意願。
-- 交戰能力的 25%、假動作能力的 35% 與變速刺能力的 20%。
-- `COMMIT` 時對敵人移動的短期前置瞄準時間。
+- 兩人攻擊不同目標；
+- 兩條刺擊線不危險交叉；
+- 第三名隊友沒有被選為攻擊者；
+- 第三名隊友仍有至少一條有效 `CoverLink`。
 
-### 脫離原位 `zoneExit`
+即使三人同時具有機會，第三名也不會加入。`tripleAttackerPlans` 必須保持 `0`，並由
+`tripleAttackRejections` 記錄拒絕。這不是把三個角色同步按下攻擊鍵，而是保留一名真正的
+掩護者。
 
-用於持續的空間 dézonage，也是「離開目前對手、轉刺另一名敵人」的主要能力。它影響空間換位的啟動頻率、持續時間與移動模式，並在換目標脫離的衍生能力中占 35%；詳細公式見後面的 dézonage 章節。
+### 攻擊、格擋與恢復的狀態推進
 
-### 接招反擊 `chamber`
+被選中的 Agent 實際經過：
 
-這個 1–100 數值主要表示 Agent 有多常放棄普通格擋，改用自己的刺擊接住對方的刺擊：
-
 ```text
-P(對普通攻擊選擇 Chamber | 已決定正面防守) = chamber / 100
+ATTACK_PREPARE → ATTACK_ACTIVE → RECOVERY
 ```
 
-因此 1 點約有 1% 會嘗試，100 點面對普通攻擊時每次都會嘗試；這不等於成功率，也不代表連鎖中會一直反接。真正的時間誤差仍由 `attackTiming`、`reaction` 與 `decisionMaking` 共同產生。只有 `chamber > 90` 才有資格抽到完美 Chamber，且：
+若目標在出手前離開範圍，既有 `ordinaryDirectTargetEscaped()` 仍可把直接攻擊轉成 Hold。
+防守者則依自己的 awareness 排程反應：
 
 ```text
-P(選擇完美型 | 已選 Chamber) = (chamber - 90) / 100
+基礎延遲 = 0.36 - 0.0024 × reaction
+Primary     +0.00 秒
+Secondary   +0.09 秒
+Peripheral  +0.22 秒
+方向資料不新鮮 +0.10 秒
 ```
-
-例如 90 點永遠不能使用完美型，93 點只有 3%，100 點也只有 10%。其餘嘗試都是可被格擋、也可被再次 Chamber 的一般型。完整時間與傷害公式見 Chamber 章節。
-
-### 雙重格擋 `doubleBlock`
 
-這是第十一個可編輯能力，專門表示在 2v1 中完成「先擋一個方向、再立刻換到相反方向」的技術。它不直接當成成功率，而是先由 `AgentStats.doubleBlockAbility()` 與實際操作能力組成有效值 `E`：
+延遲結束後才進入 `BLOCK_PREPARE`，防守 timing 仍會影響準備時間與上下判斷。只有格擋方向
+正確、角色真的面向攻擊線，而且刺刀尖端發生掃掠碰撞時才算 Block；成功後攻擊者進入
+`BLOCK_STUN`。
 
-```text
-E = round(0.50 × doubleBlock
-        + 0.225 × defenseTiming
-        + 0.15 × reaction
-        + 0.075 × decisionMaking
-        + 0.05 × footwork)
-```
+沒有命中會進入 `RECOVERY`。恢復移動額外加入 `0.38 m/s` 的遠離目標向量，因此沒有取消原本
+「攻擊恢復時拉開距離」的功能。命中仍完全交給 `resolveAttack()`、掃掠刺刀尖端、身體區域與
+`checkHit()`；計畫分數本身不能直接造成傷害。
 
-各欄位的程式意義：
+### 為何目前第一人死亡後停止
 
-- `doubleBlock` 占 50%，代表這項特殊技巧本身的熟練度；
-- `defenseTiming` 占 22.5%，而且第一次普通格擋仍須先由它選對上下段；
-- `reaction` 占 15%，代表讀取第二支刺刀的速度；
-- `decisionMaking` 占 7.5%，代表能否判斷第二次應該切到哪一名敵人；
-- `footwork` 占 5%，代表兩次接觸之間維持身體朝向與站位的能力。
+這是里程碑 4 當時的限制：為避免錯誤拆成三場決鬥，第一人死亡後先停止。里程碑 6 已正式
+加入 `GROUP_3V2`、`GROUP_3V1`，並在適當人數把控制權交還 2v2、2v1、1v1 引擎。第一死仍會
+保存 `KillExplanation` 與 `KillCausalChain`。
 
-只有存在兩個有效威脅時才抽取是否嘗試：
+### 測試與驗證檔
 
-```text
-P(嘗試雙重格擋 | 兩個威脅全部成立) = (E / 100)³
+```powershell
+java -cp .\out Experimental3v3AttackPlanTest
+java -cp .\out VisualValidation3v3Capture
 ```
 
-例如 `E = 50` 只有 12.5%，`E = 75` 約 42.19%，`E = 90` 為 72.9%。這個機率只讓狀態進入 `DOUBLE_BLOCK`，不保證第二支刺刀一定擋得住；完整的幾何、時間與失敗流程見「2v1 雙重格擋」章節。
+攻擊測試 A–E 驗證多名掩護者摘要、安全雙攻擊、禁止第三名攻擊者、物理 Hit／Block／Kill、
+恢復後退與決定性。Seeds 41、73、119 的視覺資料新增：
 
-## 二維移動與角度
+- `attacks.txt`：團隊攻擊計畫、格擋、命中與停止事件；
+- `first-kill.txt`：第一死的原因和完整因果鏈。
 
-### 速度、加速度與後退
+前十五格 contact sheet 每隔 `1 秒` 取樣。如果仍未死亡，產生器會在背景繼續模擬到最多
+30 秒；死亡後最後一格會改畫第一死的確切狀態，確保圖片與 `first-kill.txt` 都不是憑空推測。
 
-`moveAndTurn()` 先把決策轉成局部 `forward/sideways`，但不再直接把這個向量加到座標。它先算期望速度，再讓 `velocityX/Y` 在有限加速度內逐步靠近：
+## 20. 實驗 3v3 里程碑 5：Revenge 與反掩護
 
-```text
-基礎速度 = 1.05 + 0.006 × 步法
-
-攻擊有效期：×0.86
-恢復：×0.92
-FEINT：×0.84
-BLOCK_PREPARE／BLOCKING：×0.78
-forward < 0 的整體速度：再 ×0.62
-```
+里程碑 5 把格擋或刺空之後的懲罰推廣到 3v3，但不共用 `MODERN_2V2` 的仲裁狀態。一個交換被
+刻意限制為「原始攻擊 → 一名主要 Revenge 執行者 → 一名主要反掩護者」。Revenge 或反掩護
+被格擋、刺空或結束後，交換立即關閉，不會再遞迴建立下一輪 Revenge。
 
-```text
-加速度 A = 4.6 + 0.045 × 步法
-攻擊有效期 A × 0.72
-恢復期 A × 0.64
-每個物理步進的最大速度改變量 = A × dt
-```
+### 如何選擇主要 Revenge 執行者
 
-沒有移動輸入時，`3.2 + 0.018 × 步法` 的每秒摩擦力把速度平順降到 0。Agent 因此不能在同一畫格瞬間反轉。只要速度大於 0.08，程式就用：
+受威脅者的兩名隊友會各自建立 `TeamRevengeCandidate`。候選者不能偷讀真實敵人：原攻擊者
+必須是其 Primary 或 Secondary，而且觀察信心至少為 `0.24`；Peripheral 的資料不足以發動
+這種精確懲罰。
 
 ```text
-movementHeading = atan2(velocityY, velocityX)
-```
-
-保存真正跑動方向。一般局部向量以 `angle` 當基準；`PASS_THROUGH`／`DISENGAGE` 只要還有慣性，就改用 `movementHeading`，讓身體轉回敵人時雙腳仍沿原軌跡穿過。唯一例外是 `RECOVERY`：進入恢復時先移除朝敵人的閉合速度，再強制 `forward = -1`、`sideways = ±0.28`，並使用身體角作基準。配合恢復速度 `0.92`、加速度 `0.64` 及後退倍率 `0.62`，既定的「出手後遠離敵人」視覺仍被保留，只是不再是完全僵硬的直線後退。
-
-### 身體 yaw
-
-一般情況下，身體每個物理步進都朝敵人旋轉；護背期間則朝前後威脅的安全中線旋轉。兩種情況都受相同狀態轉速限制：
-
-| 狀態 | 身體轉速倍率 |
-| --- | ---: |
-| 普通 | 1.00 |
-| 攻擊有效期 | 0.62 |
-| `BLOCK_PREPARE`／格擋 | 0.68 |
-| 恢復 | 0.52 |
-| `BLOCK_STUN` | 完全不更新 |
-
-`angleDifference()` 會把角度差正規化到 `-π` 至 `+π`，避免角色繞遠路旋轉。
-
-### 刺刀 yaw
+impactEta = 感知到的對準時間
+          + 剩餘準備時間
+          + 進入刺擊距離的時間
 
-刺刀世界角度不是單純的身體角：
-
-```text
-weaponWorldAngle = angle + weaponYaw
-weaponYaw ∈ [-50°, +50°]
+vulnerability = 剩餘 BLOCK_STUN + 恢復
+             或剩餘 RECOVERY
+             或刺空後的正常恢復
 ```
-
-期望刺刀方向等於敵人方向，加上 `aimError`、誘敵的 `baitOffset`，或 Accel／Drag 的連續 yaw 偏移。格擋時則強制指向敵人。
 
-攻擊有效期刺刀保留 55% 轉速，恢復保留 44%，因此能做連續角度操作，但刺擊開始後仍不能瞬間修正到敵人的新位置。
+刺擊線會同時檢查兩名隊友。系統也會計算「候選者離開掩護位置後，其他人仍保留多少條有效
+CoverLink」，所以最近的人不一定最適合 Revenge。
 
-### 垂直 pitch
-
-武器基準高度為 `1.15 m`。攻擊時期望 pitch：
-
 ```text
-desiredPitch = atan2(attackHeight - 1.15, 水平距離)
+score = 0.36 × 時間優勢
+      + 0.20 × 刺擊線安全
+      + 0.17 × 技術與團隊能力
+      + 0.12 × 保留下來的掩護
+      + 0.15 × 面對反掩護的安全
 ```
-
-pitch 限制在 `-35°` 至 `+35°`。格擋則使用固定視覺角度：上擋 `+24°`、下擋 `-20°`、側擋 `0°`。
 
-攻擊有效期間，`updateAttackManipulation()` 再把 `baseAttackPitch` 逐步推向 Accel／Drag 的目標偏移。它修改的是實際 `attackPitch`，所以同時影響畫面傾斜、刺刀俯視投影長度、攻擊時間因子與碰撞軌跡，不是只有文字效果。
+候選者若正在攻擊、恢復、硬直、距離太遠、資訊不足、被隊友擋線、趕不上窗口或分數太低，
+就會被拒絕。只有最高分的有效候選者進入 `COMMIT_REVENGE`；另一人繼續移動與維持掩護。
 
-## 刺刀幾何與攻擊動畫
+### 只允許一名主要反掩護者
 
-### 上下段資料
+Revenge 確定後，原攻擊者的兩名隊友才會接受評估。評估使用他們對 Revenge 執行者的感知、
+對準／準備／接觸 ETA、刺擊線安全，以及決策和團隊能力。最高分的有效候選者進入
+`COUNTER_COVER`，先以 Hold 建立武器威脅；只有 Revenge 已真正出手且進入物理刺擊線時才釋放。
 
-`CombatDirection` 把每種攻擊的資料放在 enum 常數中：
+反掩護不會直接用分數取消 Revenge。它的 ETA 只會影響候選選擇，之後仍必須真的轉向、進入
+距離並通過刺刀碰撞。其他 Agent 不會同步攻擊，也不會產生無限反制鏈。
 
-| 方向 | `thrustLength` | `prepareTime` | `activeTime` | `recoveryTime` |
-| --- | ---: | ---: | ---: | ---: |
-| `UP` | 1.52 | 0.36 | 0.15 | 0.48 |
-| `DOWN` | 1.30 | 0.22 | 0.09 | 0.34 |
+### 物理解算、Debug 與統計
 
-新增攻擊方向時，不只要增加 enum 常數，也要同步檢查 `opposite()`、格擋配對、AI 選擇與畫面符號。
+Revenge 和反掩護沿用普通攻擊的狀態、上下格擋、身體區域與掃掠碰撞。統計分開記錄候選評估、
+機會、出手、拒絕、取消、格擋、刺空、命中與擊殺。`preventedRevengeChains` 記錄被主動截斷的
+後續 Revenge，證明交換不會遞迴。
 
-### pitch 改變時間與水平長度
+按 `D` 可看到 Revenge 執行者、目標、保留連結數、反掩護風險與分數，以及反掩護者的 ETA。
+`attacks.txt` 現在也包含 `GROUP3_REVENGE_*`、`GROUP3_COUNTER_COVER_*` 和
+`GROUP3_EXCHANGE_FINISHED`。
 
-攻擊準備、有效與恢復時間都乘：
-
-```text
-timingFactor = 1 + 0.35 × clamp(attackPitch / 35°, -1, 1)
+```powershell
+java -cp .\out Experimental3v3RevengeTest
+java -cp .\out VisualValidation3v3Capture
 ```
 
-朝地面 `-35°` 時倍率 0.65；朝天空 `+35°` 時倍率 1.35。
+測試 A–E 保證只有一名 Revenge 執行者、風險值有界、最多一名反掩護者、沒有無限反制鏈、
+自然交換會物理解算且相同 seed 具有決定性。里程碑 6 現在會在第一死後繼續比賽。
 
-三維刺刀投影到俯視平面的有效距離：
+## 21. 實驗 3v3 里程碑 6：局部 Cluster 與人數轉換
 
-```text
-projectedThrustLength = thrustLength × cos(attackPitch) × attackReachScale
-```
+里程碑 6 明確分開兩件事：「局部幾何關係」只是一段描述；「人數真的改變」才會重建戰鬥
+架構。比賽不再於第一人死亡時停止，而會持續到其中一隊全滅。
 
-一般 `attackReachScale = 1`；中計的過早刺擊改成 0.62。
+### `LocalEngagementCluster` 不會控制玩家
 
-### 刺擊伸縮
+每 `0.15 秒`，系統會用存活敵人建立二分圖。兩名敵對 Agent 距離低於 `2.75 m`，或任一方向
+的最佳命中 ETA 低於 `0.85 秒`，就建立一條互動邊。相連成分會形成
+`LocalEngagementCluster`，保存雙方成員、中心、半徑、最低 ETA、孤立信心、是否仍受支援及原因。
 
-休息長度為：
+Cluster 可描述中央混戰、暫時 2v1、受爭奪的側翼或真正孤立；但它不會建立 `DUEL`、不會建立
+`TWO_VS_ONE`、不會鎖定目標，也不會命令整隊旋轉。
 
-```text
-restLength = 0.92 × cos(pitch)
-```
+### 孤立必須同時考慮時間與掩護
 
-攻擊有效期用正弦曲線從休息長度伸到最大值再收回：
+若一名 Agent 在局部同時面對多名敵人：
 
 ```text
-progress = min(1, stateTime / activeTime)
-weaponLength = restLength
-             + (projectedThrustLength - restLength) × sin(progress × π)
+isolationConfidence = 0.34 × 局部人數劣勢
+                    + 0.34 × CoverNetwork 損失
+                    + 0.32 × 最快隊友支援延遲
 ```
 
-這讓碰撞使用的刺刀尖端與畫面動畫共用同一個長度，不會出現畫面看似沒碰到、程式卻用另一個隱藏距離判定的情況。
+信心必須達到 `0.66` 並持續約 `0.35 秒`，才算 durable isolation。只是在畫面上離隊不夠；
+若圈外隊友仍能在攻擊前後及時介入，Cluster 會標記為 `contested`。
 
-### 刺刀尖端
+### 3v2 與 3v1 仍是集體戰鬥
 
-上下段另有 `±0.08 m` 的二維側向偏移。尖端座標為：
+每次死亡後都會清除死亡目標、觀察資料、攻擊計畫、掩護摘要和舊 Cluster，接著立刻重算隊形與
+`CoverNetwork`。
 
 ```text
-tipX = x + cos(weaponAngle) × weaponLength
-         - sin(weaponAngle) × weaponOffset
-
-tipY = y + sin(weaponAngle) × weaponLength
-         + cos(weaponAngle) × weaponOffset
+3 對 2 → GROUP_3V2
+3 對 1 → GROUP_3V1
 ```
 
-`snapshotMotion()` 在每個物理步進開始保存 `previousTipX/Y`，移動與刺刀動畫完成後再由 `tipX()/tipY()` 取得新位置。命中判定因此使用整段軌跡，不只檢查最後一點。
+3v2 不會自動拆成 `2v1 + 1v1`。三人方保留三點隊形，兩人方使用調整過的左右位置。3v1 時，
+兩名攻擊者可以從不同刺擊線評估同一目標，但仍禁止三人同時刺擊，而且必須保留一名掩護者。
 
-## 命中、格擋與傷害判定
+### 回到已驗證的戰鬥引擎
 
-### 水平碰撞
+只要雙方都不再有三人，3v3 集體引擎就會關閉並執行 handoff：
 
-只有 `ATTACK_ACTIVE` 或 `CHAMBER_ACTIVE` 能進入命中判定。為了同時處理刺刀與防守者的移動，程式先建立相對位置：
-
 ```text
-R0 = previousTip - previousDefenderPosition
-R1 = currentTip - currentDefenderPosition
-V = R1 - R0
-
-t = clamp(-(R0 · V) / |V|², 0, 1)
-最小距離 = |R0 + tV|
-
-最小距離 ≤ BODY_RADIUS 才有水平接觸
-BODY_RADIUS = 0.32 m
+2 對 2 → EngagementType.GROUP_2V2
+2 對 1 → EngagementType.TWO_VS_ONE
+1 對 1 → EngagementType.DUEL
 ```
-
-當 `|V|²` 幾乎為 0 時直接使用 `|R1|`。這是相對運動的掃掠碰撞：即使快速刺刀在前一個步進位於圓左側、下一個步進已到圓右側，只要中間線段穿過身體仍會被偵測；防守者同時移動也不會把命中窗口錯開。
-
-命中、格擋或垂直落空後會把 `attackResolved` 設為 `true`，避免同一次刺擊在多個物理步進重複造成傷害。
 
-### 垂直命中部位
+Handoff 使用既有建構流程、`FIX/FLANK/SURVIVE`、隊伍動作、決策與物理碰撞；沒有重新校準
+已驗證的 `TWO_VS_ONE`。後續死亡可繼續從 2v2 轉成 2v1，再轉成 1v1，最後進入 `COMPLETE`。
 
-俯視畫面沒有真正的 z 軸，因此使用 `attackHeight` 表示刺刀高度：
+### Debug、統計與測試
 
-| 部位 | `HitZone` 高度 |
-| --- | ---: |
-| 腿部 | 0–0.65 m |
-| 軀幹 | 0.65–1.50 m |
-| 頭部 | 1.50–1.80 m |
+按 `D` 會顯示目前階段，以及每個 Cluster 的成員、ETA、孤立信心和原因。統計會記錄 Cluster、
+暫時 2v1、contested、durable isolation、3v2／3v1 建立、三種 handoff 與死亡參照清理。
 
-`HitZone.atHeight()` 在高度小於 0 或大於 1.80 時回傳 `null`。即使水平刺刀碰到圓形，垂直高度無效仍然算刺空。
-
-### 格擋
-
-`BlockDirection.blocks()` 只允許：
-
-```text
-UP 擋 UP
-DOWN 擋 DOWN
-SIDE 不擋目前的上下刺擊
+```powershell
+java -cp .\out Experimental3v3TransitionTest
+java -cp .\out VisualValidation3v3Capture
 ```
-
-除了方向相符，防守者刺刀還必須在朝向攻擊者的 `75°` 以內。成功後攻擊者進入 `BLOCK_STUN`，而不是立刻回到中立。
-
-### 傷害
 
-普通傷害：
+測試 A–G 驗證受支援的暫時 2v1、持續孤立、3v2 不拆分、集體 3v1、三種既有引擎 handoff、
+決定性，以及自然完整比賽不產生無效座標。`contact-sheet.png` 保留第一死畫面，
+`transition-sheet.png` 顯示之後八個時間點；`transitions.txt` 記錄集體階段與 handoff，
+`match-result.txt` 則保存完整比賽的時間、最後階段和勝方。
 
-| 部位 | 傷害 |
-| --- | --- |
-| 頭部 | 100 |
-| 軀幹 | 95% 為 100，5% 為 50 |
-| 腿部 | 40 |
+### 完成驗收與 500 seeds Batch
 
-若攻擊者的 `punishingBait` 為 `true`，在實際碰撞與格擋檢查都通過後，傷害固定為 100。
+Cluster 現在真的會影響引擎，但不會控制玩家：同一 Cluster 內的威脅只會得到小幅注意力顯著度
+加成；若目標持續失去 CoverNetwork，且局部獨自面對至少兩名敵人，攻擊理由可成為
+`TARGET_ISOLATED_FROM_COVER_NETWORK`。每次機會都會凍結一份 `ClusterOpportunityEvidence`，
+保存局部雙方人數、孤立信心、最低 ETA、是否 contested 和原因。孤立者只會獲得輕微返回隊形
+的移動修正，不會被指定座標或鎖定目標。
 
-HP 歸零時會：
+Batch 找到的最後一個停滯，是兩名隊友用相同高度 Hold 同一名正在格擋的敵人。Hold 仍然沒有
+最長時間；但若兩條真實 Hold 線同時指向同一目標與同一高度，第一人維持威脅，第二人會明確
+選擇相反高度。這會打開刺擊線或迫使對方執行上下雙重格擋，第三人繼續擔任掩護者。
 
-1. 把 `alive` 設成 `false`。
-2. 清除死者的 `target` 並停止誘敵。
-3. 設定 `CombatState.DEAD`。
-4. 暫存最後造成擊殺的攻擊者，但不立即結束戰鬥。
-5. 該步進的所有命中處理完成後，只有整隊全滅才設定 `winningTeam`。
-
-## 2v1 雙重格擋的程式流程
-
-雙重格擋處理兩名敵人幾乎同時以一上、一下攻擊同一名 Agent 的情況。它不是一般格擋持續時間內自動擋住兩次，也不是機率抽中後免疫所有攻擊；第一下、第二下都仍由刺刀尖端實際碰撞觸發。
-
-### 1. 第一個接觸必須先正常格擋
-
-`checkHit(firstAttacker, defender)` 先用既有規則處理第一支刺刀：
-
-```text
-不是背刺
-defender.state == BLOCKING
-blockDirection 與第一支攻擊方向相符
-防守刺刀朝向第一名攻擊者，誤差 < 75°
+```powershell
+java -cp .\out Experimental3v3BatchTest 100
+java -cp .\out Experimental3v3BatchTest 500
 ```
 
-只有這次普通格擋成功後才呼叫 `tryBeginDoubleBlock(defender, firstAttacker)`。因此 `defenseTiming` 若一開始就選錯方向，Agent 會直接受傷，根本沒有雙重格擋的補救抽籤。
+Seeds 1–500 最終結果：`500` 場完成、`0` timeout、`0` 無效位置、`0` 出界、`0` 決定性失敗。
+Batch 觀察到 `305` 次持續孤立、`1553` 次 Cluster 攻擊出手、`247` 次對應命中、`394` 次
+3v2、`314` 次 3v1，以及三種 handoff。
 
-### 2. 第二名攻擊者必須是真實且可見的威脅
+### 淘汰後畫面凍結修正——里程碑 2：交易式陣容轉換
 
-`tryBeginDoubleBlock()` 逐一檢查防守者的另一名敵人，必須全部符合：
+`MODERN_3V3` 不再從多個分支直接重建戰鬥引擎。每個物理 tick 完成攻擊解析後，
+`captureRoster()` 會建立 `RosterSnapshot`。它用藍、紅各三個 bit 的固定 mask 保存原始六名
+Agent 的生存狀態，另存雙方存活人數；即使 handoff 後 `blueTeam` 或 `redTeam` 陣列縮短，mask
+的身分位置也不會改變。
 
-```text
-opponent != firstAttacker
-opponent.alive
-opponent.isAttacking()
-!opponent.attackResolved
-opponent.target == defender
-opponent.attackDirection == firstAttacker.attackDirection.opposite()
-isVisible(defender, opponent)
-!isRearAttack(defender, opponent)
-刺刀朝向防守者的誤差 ≤ 34°
-中心距離 ≤ projectedThrustLength + BODY_RADIUS + 0.35 m
-stateTime ≤ activeTime × 0.65
-max(0, activeTime / 2 - stateTime) ≤ 0.20 s
-```
-
-這些條件分別阻止假 2v1：第二人只是在附近但還沒刺、兩人刺同一方向、第二人其實瞄準隊友、側面遠距離敵人尚未被看見、背刺，以及已經進入收刀後半段的攻擊。最後的 `0.20 s` 是兩次威脅的最大判讀窗口，不代表第二次一定來得及切換。
+程式碼只透過以下兩個實體方法處理人數變化：
 
-### 3. 有效能力與嘗試機率
-
-有效能力由 `AgentStats.doubleBlockAbility()` 計算：
-
 ```text
-E = round(0.50 × doubleBlock
-        + 0.225 × defenseTiming
-        + 0.15 × reaction
-        + 0.075 × decisionMaking
-        + 0.05 × footwork)
-
-P(辨認並嘗試 | 第二威脅有效) = (E / 100)³
+requestRosterTransition(snapshot)
+→ applyPendingRosterTransition()
 ```
 
-| `E` | 嘗試機率 | 高低切換時間 |
-| ---: | ---: | ---: |
-| 25 | 1.56% | 0.15875 秒 |
-| 50 | 12.50% | 0.12750 秒 |
-| 75 | 42.19% | 0.09625 秒 |
-| 90 | 72.90% | 0.07750 秒 |
-| 100 | 100% | 0.06500 秒 |
+`processedRoster` 是已經安裝到引擎的陣容，`pendingRosterTransition` 是本 tick 物理解析完成後
+看到的最終陣容。若同一 tick 有兩人死亡，兩個死亡會合併在同一個 snapshot，不會先建立
+3v2，再於同一 tick 建立 2v2。成功安裝後會立刻更新 `processedRoster` 與相容用的
+`experimentalAliveMask`，下一個 tick 看到相同 mask 時直接返回。
 
-使用三次方不是命中率，而是讓中低能力者很少決定冒險使用這項極難技術。即使抽中，時間與刺刀朝向仍可能讓第二次格擋失敗。
+每次轉換使用遞增的 `transitionId`，並保存兩筆 `TransitionTrace`：第一筆是
+`applied=false` 的 REQUEST，第二筆是 `applied=true` 的 APPLIED。兩筆共用同一 ID，記錄 tick、
+模擬時間、初始 scenario、前後 controller、前後 phase、前後 mask、存活人數與原因。資料只存
+在有界的模擬診斷結構中，不會每一幀輸出到 Swing 所在的 console。
 
-### 4. `DOUBLE_BLOCK` 狀態如何切換方向
+`transitionInProgress` 阻止遞迴進入；`transitionAppliedThisTick` 阻止同一 tick 套用第二次。
+已成功使用過的 `TransitionKey` 若再次出現，程式會增加
+`duplicateTransitionApplications` 並拋出明確錯誤，不會靜默重建。其他計數包含 request、
+application、重複 request、遞迴嘗試及同 tick 多次嘗試。
 
-成功決定嘗試時，程式先結束目前 dézonage，接著保存：
-
-```text
-doubleBlockThreat = 第二名攻擊者
-doubleBlockSecondDirection = matching(第二支攻擊方向)
-doubleBlockSwitchTime = 0.19 - 0.00125 × E
-doubleBlockSwitched = false
-state = DOUBLE_BLOCK
-decision = DOUBLE_BLOCK
-```
-
-第一支攻擊者同時進入原本的 `BLOCK_STUN`。防守者在切換時間到達前仍保留第一次的 `blockDirection`；`updateState()` 到點後才把它換成 `doubleBlockSecondDirection`，並把 `doubleBlockSwitched` 設成 `true`。整個狀態至少維持：
-
-```text
-max(0.26, doubleBlockSwitchTime + 0.12) 秒
+```powershell
+java -cp .\out Experimental3v3TransitionTest
+java '-Djava.awt.headless=true' -cp .\out Experimental3v3SwingTransitionTest
+java -cp .\out Experimental3v3BatchTest 500
 ```
 
-`moveAndTurn()` 在這段期間不再只朝原本的 `target`，而是把 `doubleBlockThreat` 當成身體與刺刀的新朝向來源。因為轉身仍有速度上限，所以第二人角度太側時，即使高能力者完成上下切換，也可能無法在碰撞前進入 75° 格擋角。
+轉換測試現為 A–J，新增驗證第一次死亡只套用一次、同 tick 雙死只產生一個最終 snapshot，
+以及後續 1,000 ticks 不會重複套用。3v3 batch 仍為 `500/500` 完成且沒有 timeout 或決定性
+失敗。500 場共產生 `1463` 次 request 與完全相同的 `1463` 次 application；重複 request、
+重複 application、遞迴進入、同 tick 第二次套用全部為 `0`。2v2 的 28 項驗收也仍在
+500 seeds 全數通過。
 
-### 5. 第二個接觸與必然失敗情況
+### 不可逆的目前控制器——里程碑 3
 
-第二支刺刀進入身體圓形時，只有以下條件成立才沿用格擋分支：
+現在 `SimulationScenario` 與實際執行戰鬥的控制器是兩個不同概念。scenario 只記錄比賽從
+`MODERN_3V3` 或 `CONTROLLED_3V3` 開始，之後不會改變；`activeCombatController` 則使用新的
+`ActiveCombatController` enum，唯一決定下一個 tick 要執行哪一套引擎：
 
 ```text
-state == DOUBLE_BLOCK
-doubleBlockSwitched == true
-doubleBlockThreat == secondAttacker
-blockDirection.blocks(secondAttacker.attackDirection)
-不是背刺
-防守刺刀朝向第二名攻擊者，誤差 < 75°
+GROUP_3V3 → GROUP_3V2 → GROUP_3V1
+                    ↘ GROUP_2V2 → TWO_VS_ONE → DUEL → COMPLETE
 ```
 
-若第二支刺刀早於 `doubleBlockSwitchTime` 抵達、由不是記錄中的敵人碰撞、方向不符、角度不足，或從背後命中，就直接進入原本的 `applyDamage()`。因此「幾乎同時」若近到沒有任何換向時間，仍然擋不住；這是物理失敗，不會再抽第二次亂數。
+實驗模式的更新入口改用 `switch (activeCombatController)`。`GROUP_3V3`、`GROUP_3V2`、
+`GROUP_3V1` 才能呼叫三人集體引擎；`GROUP_2V2`、`TWO_VS_ONE`、`DUEL` 只能呼叫既有的
+handoff 引擎。handoff 內判斷是否更新 group movement 或 flank 時，也改讀 controller，不再
+用初始 scenario 或只靠 `experimentalGroupPhase` 猜測引擎所有權。
 
-成功時第二名攻擊者也進入 `BLOCK_STUN`，`doubleBlockMessageTime` 啟動 1.15 秒。畫面顯示紫色 `⇅`、`Double parade`／「雙重格擋」狀態和 `DOUBLE BLOCK !`／「雙重格擋！」；兩次碰撞仍各自在刺刀尖端位置產生格擋火花。
-
-## 接招反擊（Chamber）的程式流程
-
-Chamber 不是「先格擋再反擊」。AI 在威脅到達前呼叫 `beginChamberAttempt()`，令 Agent 進入 `CHAMBER_PREPARE`，並用與來招相同的上下段主動接招。此時 Agent 不在 `BLOCKING`；方向、時間或朝向錯誤時，敵人的刺擊會照常造成傷害。
-
-### 1. 嘗試率與類型
-
-只有 AI 已判斷需要正面防守、反應倒數歸零且自己仍為 `NEUTRAL` 時，才會抽。面對普通攻擊時：
-
-```text
-P(選 Chamber) = chamber / 100
-```
+轉換交易會先關閉舊的 3v3 engagement，清除 `modernGroup3Engagement`，建立既有的 2v2、2v1
+或 1v1 engagement，再安裝新 controller。`applyPendingRosterTransition()` 會比較實際安裝的
+controller 與 snapshot 所要求的 controller；不一致就明確失敗，不會更新 `processedRoster`。
+因為死亡不可逆，程式裡也沒有從 `GROUP_2V2`、`TWO_VS_ONE` 或 `DUEL` 返回三人引擎的路徑。
 
-沒有選中便走普通 `beginBlock()`。選中後，只有能力超過 90 才可能成為完美型：
+新增的 K 測試強制走過 2v2、2v1、1v1，確認初始 scenario 保持 3v3、新 controller 接收下一
+tick，而且所有舊 controller 的 tick counter 立即停止增加。500 場自然比賽的 controller
+執行次數為：
 
 ```text
-chamber ≤ 90：一定是 SIMPLE
-chamber > 90：P(PERFECT) = (chamber - 90) / 100
+GROUP_3V3=277675  GROUP_3V2=77612  GROUP_3V1=123060
+GROUP_2V2=85589   TWO_VS_ONE=125222  DUEL=21114
 ```
 
-`ChamberType` 保存 `NONE`、`SIMPLE` 或 `PERFECT`。能力值主要改變使用傾向，不直接保證成功。
+`1463` 次陣容轉換仍全部一對一套用；重複、遞迴與同 tick 第二次套用都是 `0`。本里程碑沒有
+調整任何移動、攻擊、格擋或戰術參數。
 
-### 2. 時間誤差與攔截
+### 死亡參照的中央清除——里程碑 4
 
-```text
-timingSkill = (attackTiming + reaction + decisionMaking) / 3
-σ = max(0.012, 0.060 - 0.00045 × timingSkill)
-chamberTimingError ~ N(0, σ)
-```
+每次陣容交易在重建 controller 前，只呼叫一個清除入口：
+`purgeDeadReferences(aliveAgents())`。`aliveAgents()` 以物件身分建立 Set，所有檢查都使用同一份
+存活來源，不會一部分讀縮短後的 team array、另一部分仍讀原始六人 array。
 
-刺刀尖端真正進入防守者身體圓形時，`checkHit()` 才檢查 Chamber。除此之外還要求上下段相同，並且防守者刺刀與攻擊者方向誤差小於 `75°`。時間窗口為：
+對每名 Agent，清除程式會處理：
 
 ```text
-SIMPLE：abs(error) ≤ 0.025 秒
-PERFECT：chamber > 90 且 abs(error) ≤ 0.004 秒
+target、plannedTarget、primaryMark、secondaryThreat
+coveredBy、covering、各種 pressure/dezone/rear reference
+tacticalThreat、group3DefensiveThreat、movementIntent.target
+AttentionAllocation 的五個威脅欄位
+MultiThreatAttention 與 opponentAwareness
+pressureByOpponent、localThreatByOpponent
 ```
-
-`CHAMBER_PREPARE` 最多持續 0.65 秒；若敵人沒有真正碰到便回到 `NEUTRAL`。攔截失敗不會自動改成格擋。
-
-### 3. 一般 Chamber 與連鎖
-
-一般型成功後，接招者進入 `CHAMBER_HOLD` 0.24 秒，再轉成 `CHAMBER_ACTIVE`：
 
-```text
-來招 ATTACK_ACTIVE
-→ 接招者 CHAMBER_PREPARE
-→ 接招成功
-→ 接招者 CHAMBER_HOLD 0.24 秒
-→ CHAMBER_ACTIVE
-```
+若複合物件的任何參與者已死亡，整個物件會失效，包括 `CoverAssessment`、
+`AttackOpportunity`、`RevengeOpportunity`、`CounterCoverAssessment`、`WeaponThreatLane` 與
+`LocalManeuver`。`Group3v3Engagement` 另外清除 active CoverLink、Cluster、isolation time、
+凍結證據、TeamAttackPlan、revenge 與 counter-cover。
 
-原攻擊者會先回到 `NEUTRAL` 並立刻重新評估。因此它如果反應、位置與能力足夠，可以普通格擋，也可以用自己的 Chamber 接回去。後者再次呼叫 `beginChamberReturn()`，令 `chamberChain` 由 1 增為 2、3……，直到一方格擋、失誤、閃開或被命中。畫面會顯示 `CHAMBER ×2` 等連鎖數字。
+`TeamFormation3.members` 與 `CoverNetwork.members` 是固定 roster 身分，不是 AI 的 active target，
+所以不修改陣列本身；但 formation 的 left/center/right role、可用 cover relation 與 active plan
+絕不能指向死人。若 TeamManeuver 的 inner/outer 玩家死亡，程式不會刪掉整個 maneuver 或重新
+抽亂數，而是用 `rebindGroup3Maneuver()` 保留 type、方向、起始時間與持續時間，再把角色綁到
+存活 formation role。`viable=false` 且理由為 `dead_participant` 的 CoverLink 只是一次評估紀錄，
+不算 active cover link，也不影響 audit。
 
-連續反接比第一次接招危險，因此不再直接重複使用完整的 `chamber / 100`。若來招是第 `n` 層一般 Chamber：
+controller 安裝完成後，`auditDeadReferences()` 建立 `DeadReferenceAudit`，分別計算：
 
 ```text
-reChamberFactor(n) = max(0.05, 0.50 - 0.10 × n)
-P(再次 Chamber) = chamber / 100 × reChamberFactor(n)
-P(改用格擋) = 1 - P(再次 Chamber)
+activeDeadTargets、deadAttentionReferences、deadCoverLinks
+deadClusterMembers、deadFormationMembers、deadPlanMembers、details
 ```
-
-係數在第 1、2、3、4 層分別為 0.40、0.30、0.20、0.10，第 5 層後最低維持 0.05。即使 `chamber = 100`，第一次反接也只有 40%，第四次只有 10%，長連鎖只剩 5%。
 
-AI 改用格擋時，還會因為連鎖動作已經變得明顯而更容易選對上下段：
-
-```text
-連鎖格擋能力 = min(100, defenseTiming + 8 × n)
-```
+任何計數不為零都會立刻讓轉換失敗並列出 details，避免錯誤狀態在後續 tick 被反覆修補。新增
+L 測試會故意把同一名死者塞入 target、plan、cover、pressure、movement 與 attention，再驗證
+所有 active reference 都被清除。
 
-這個加成只套用於阻擋一般 Chamber 回擊；普通攻擊的格擋能力不變。完美 Chamber 仍會直接讓原攻擊者進入 `BLOCK_STUN`，所以沒有選擇格擋或再次 Chamber 的機會。
+500 場結果為：`1463` 次 transition application、`1463` 次 purge、轉換後死亡參照 `0`、
+`500/500` 完成、決定性失敗 `0`。Swing 測試與 2v2 的 28 項驗收仍然通過。
 
-一般 Chamber 預設瞄準軀幹，但步法會造成回擊高度與水平角誤差：
+### 有界日誌、進度 watchdog 與 failsafe——里程碑 5
 
-```text
-σheight = 0.06 + (100 - footwork) × 0.002 m
-σyaw = 0.05 + (100 - footwork) × 0.002 rad
-```
+陣容轉換現在透過 `TransitionLogger` 記錄。每個 request 與 applied 結論各有一行，內容包含
+transition ID、tick、模擬時間、前後 controller、phase、雙方 mask 與原因。logger 同時保存
+最多 `256` 行與 `256` 個去重 key；超過上限時，最舊行與對應 key 會一起移除，所以文字 buffer
+與去重 Set 都不會無限成長。
 
-一般型刺中軀幹通常只造成 50 傷害。只有當下距離、刺刀對正與步法共同形成罕見理想位置，才升成 100：
+一般遊戲模式不啟用 console，因此不會從 Swing EDT 呼叫 `System.out.println()`；
+`consoleLinesEmitted` 保持 `0`。`emitOnce(key, line)` 用 key 阻止同一錯誤反覆輸出，並分別統計：
 
 ```text
-idealDistance = projectedThrustLength + BODY_RADIUS - 0.10
-distanceQuality = max(0, 1 - abs(distance - idealDistance) / 0.45)
-facingQuality = max(0, 1 - abs(facingError) / 0.40)
-P(一般 Chamber 軀幹致死) = footwork / 500 × distanceQuality × facingQuality
+consoleLinesEmitted
+duplicateConsoleLinesSuppressed
+storedLinesDropped
 ```
-
-即使所有品質都是 1，機率上限也只有 20%。這模擬決鬥步法令回擊很少剛好落在一擊致死的理想位置。一般型若意外刺中頭部仍為 100，刺中腿部為 40。
-
-### 4. 完美 Chamber
-
-完美型使用僅 `±4 ms` 的窗口。成功後原攻擊者進入 `BLOCK_STUN`，無法格擋或再次 Chamber；接招者立即進入 `CHAMBER_ACTIVE`，並以確定的軀幹高度回擊。只要實際水平碰撞成立，完美 Chamber 傷害固定為 100。
-
-因此完美型同時有三層稀有條件：能力必須大於 90、選擇類型的機率最多 10%，而且還要落入極窄的時間窗口。它是困難的特殊技巧，不是高能力 Agent 每次防守都能免費使用的必殺技。
 
-## 誘敵陷阱的程式流程
+M 測試連續送入同一錯誤 1,000 次，結果只保存一行並抑制 `999` 行；再加入 300 個不同 key 後，
+buffer 仍正好是 256 行。原本的 tacticalLog 也改為 `ArrayDeque`，最多保留 `4096` 個事件，避免
+長時間可視比賽持續增加記憶體。
 
-### 1. 開始誘敵
+每個可視模擬 tick 結束時，`ProgressSnapshot` 會複製 tick、simulationTime、目前 controller、
+`RosterSnapshot`、六個 `Pos` 與六個 `CombatState`。watchdog 比較相鄰 snapshot，更新：
 
-敵人必須是 `NEUTRAL`，感知距離必須介於 1.50–2.05 m。每次符合條件的決策：
-
 ```text
-P(開始誘敵) = floor((decisionMaking + distanceControl) / 4) / 1000
-```
-
-`beginBait()` 執行：
-
-```java
-++self.baitSequence;
-self.baitOffset = 左或右的 22°–40°;
-self.baitTime = 0.35–0.75 秒;
+ticksWithoutAnyPositionChange
+ticksWithoutAnyStateChange
+repeatedTransitionStateTicks
+logicalFreezeReports
 ```
-
-`baitSequence` 是每次開口的編號，讓同一名敵人只判讀一次同一個陷阱。
 
-### 2. 判斷是否看見
+只有連續五秒模擬時間都沒有任何位置、狀態、controller 或 roster 變化，才是全域 logical
+freeze。單一 Agent 的無限 Hold 不是 freeze，只要其他 Agent 仍在移動或狀態仍推進。N 測試讓
+一名 Agent Hold 六秒，確認 watchdog 不會誤報。
 
-敵人刺刀偏離自己超過 18° 才算 `visibleBait`。實際距離還必須介於 1.38–1.82 m。
+failsafe 使用 `RosterRequestObservation` 保存最近 60 ticks 的請求。相同且尚未處理的 roster
+被要求超過兩次時，模擬只會暫停一次，並建立 `TransitionFailsafeReport`。報告凍結 scenario、
+controller、目前/processed/pending roster、最後 transition、最後死亡參照 audit、active
+engagement 與簡化 stack。O 測試確認第四次相同請求不會建立第二份報告或第二行警告。
 
-若 `observedBaitSequence != enemy.baitSequence`，Agent 用 `distanceControl` 的共用正確率曲線判斷是否識破：
+500 場自然測試結果：`maximumTicksWithoutPositionChange=0`、
+`maximumTicksWithoutStateChange=2112`、`maximumRepeatedTransitionStateTicks=0`、
+`logicalFreezeReports=0`、`transitionFailsafePauses=0`、`consoleLinesEmitted=0`。即使戰鬥狀態長時間
+不變，只要角色位置仍持續變化，就不會被誤判成 freeze。
 
-- 失敗：呼叫 `beginBaitedAttack()`，過早刺擊並落入原本的距離陷阱。
-- 成功：再使用決策能力、步法與攻擊性，選擇前壓反擊或安全側移。
+### 圖形重現模式與最終驗證——里程碑 6
 
-第二次選擇不是操作正確率，而是戰術意願：
+以下指令會開啟真正的 `MapPanel`、`javax.swing.Timer`，而且使用和主選單 3v3 相同的建立流程：
 
-```text
-P(前壓反擊 | 已識破距離陷阱)
-= (decisionMaking + footwork + aggression) / 300
+```powershell
+java -cp .\out Main debug-3v3-transition 41
 ```
-
-三項全部為 100 時一定前壓，全部為 0 時一定側移。能力值同時保留不同職責：
 
-- `decisionMaking`：是否理解前進後才出手能反過來利用開口。
-- `footwork`：是否願意採用這種移動方案，以及實際接近速度。
-- `aggression`：是否願意承擔進入刺刀距離的風險。
+`Main.parseArguments()` 會保留 `SimulationScenario.MODERN_3V3`，只在建立完成的 MapPanel 上呼叫
+`enableTransitionDebug()`。因此 debug 不會使用另一套 headless update loop，也不會改變 AI、
+速度或物理。第一次死亡出現時，`TransitionDebugRecorder` 保存 wall-clock 與 roster，接著在
+1× 下繼續觀察 15 秒。每個 Timer callback 都比較固定六名 Agent 的 `Pos` 與 `CombatState`，
+統計位置變化、狀態變化、新攻擊與後續死亡；即使比賽提前 COMPLETE，Timer 與 repaint 計數仍
+會繼續到觀察期結束。
 
-目前藍色條件機率為 `212 / 300 = 70.67%`，紅色為 `192 / 300 = 64%`。把距離識破率也乘入後，每次真正看見有效誘敵時：
+報告內容先在 EDT 內組成不可變字串，再由 `CompletableFuture` 非同步寫入 UTF-8，避免檔案 I/O
+拉長 Swing callback。輸出路徑為：
 
-| Agent | 距離中計 | 識破後前壓 | 識破後側移 |
-| --- | ---: | ---: | ---: |
-| 藍色 | 10.63% | 約 63.15% | 約 26.21% |
-| 紅色 | 21.17% | 約 50.45% | 約 28.38% |
-
-三者合計為 100%，而且同一個 `baitSequence` 只判斷一次。
-
-### 3. 識破後前壓攻擊
-
-選擇前壓時呼叫 `beginBaitAdvanceAttack()`：
-
-1. 停止雙方誘敵並中止自己的 dézonage。
-2. 選擇速度較快、距離較短的 `CombatDirection.DOWN`。
-3. 使用 `configureCertainTorsoAim()` 固定瞄準軀幹，讓結果著重在接近與防守，而不是額外瞄準抽籤。
-4. 設定 `exploitingBait = true` 與 `Decision.EXPLOIT_BAIT`。
-5. 進入 `ATTACK_PREPARE`，並在準備及保持期間持續向前。
-
-一般 `HOLD_LIMIT` 不會強制釋放這次攻擊。`chooseDecision()` 每次重新計算真實距離與刺刀世界角，只有同時符合以下條件才刺出：
-
 ```text
-真實距離 ≤ projectedThrustLength + BODY_RADIUS - 0.08
-abs(刺刀世界角 - 敵人方向) < 0.30 rad
+out/debug/transition-seed-<seed>.log
 ```
 
-`0.08 m` 是確保刺刀真正進入對手碰撞圓的距離餘裕。若誘敵者後退，前壓者會繼續追到條件成立，而不是在原地把同一個距離陷阱再犯一次。步法會透過基礎速度直接改變追上的時間。
+報告包含 post-death progression、REQUEST/APPLIED transition、交易計數、死亡參照 audit、
+watchdog、勝負結果與完整 EDT metrics。`Debug3v3TransitionSeedsTest` 會平行建立三個真正的
+MapPanel，在 1× 執行 Timer，並定期把每個 panel 畫進 BufferedImage，確認不只是 simulation
+callback，而是實際 paint path 也能持續執行。
 
-這次攻擊不是 `baitedAttack`，所以誘敵者會把它視為正常可信威脅並立刻取消開口：
-
-```text
-reactionTime = 0.10 + (100 - reaction) × 0.0045 + U(0, 0.07)
+```powershell
+java '-Djava.awt.headless=true' -cp .\out Debug3v3TransitionSeedsTest
 ```
-
-反應時間歸零後，誘敵者會呼叫 `beginBlock()`。`defenseTiming` 再透過共用操作正確率決定能否選到 `DOWN` 格擋：
-
-- 反應夠快且方向正確：刺擊被擋，攻擊者進入 `BLOCK_STUN`。
-- 反應太慢：刺刀可能在開始格擋前命中。
-- 防守時機失敗：可能選成 `UP` 或 `SIDE`，仍會被下段刺中。
-
-因此這個分支的結果主要是「成功格擋或被刺中」，而不是預先指定勝負；最後仍由實際位置、方向與 `checkHit()` 判定。畫面會顯示藍色 `CONTRE-APPÂT !`／`識破前壓！`。
-
-### 4. 中計刺擊
 
-`beginBaitedAttack()` 會：
+本次結果：
 
-1. 停止雙方目前的誘敵。
-2. 中止中計者的 dézonage。
-3. 強制選擇上段與軀幹方向。
-4. 把 `attackReachScale` 設成 0.62。
-5. 設定 `baitedAttack = true`。
-6. 進入 `ATTACK_PREPARE`，完成後直接刺出。
-
-中計者在準備與攻擊有效期不移動，所以縮短後的刺刀會真正在畫面上刺不到。它的 `recoveryTime()` 另乘 1.55，形成無法格擋的懲罰窗口。
-
-### 5. 誘敵者準備懲罰
-
-`chooseDecision()` 看到 `enemy.baitedAttack` 時，不把這次過短攻擊視為可信威脅，而是呼叫 `beginBaitPunish()`：
-
-- 上段攻擊確保距離。
-- `configureCertainTorsoAim()` 固定瞄準軀幹中心，避免把誘敵結果再變成隨機瞄準失誤。
-- `punishingBait = true`。
-- 準備完成後保持攻擊，直到敵人進入 `RECOVERY`。
-
-移動時只接近到：
-
 ```text
-safePunishDistance
-= 敵人縮短後的刺擊距離 + 0.32 身體半徑 + 0.08 安全距離
+seed 41  ：891 post-death ticks、396 次位置變化、57 次狀態變化、
+           12 次攻擊、2 次後續死亡、EDT max 14.590 ms、比賽完成
+seed 73  ：888 post-death ticks、765 次位置變化、77 次狀態變化、
+           15 次攻擊、2 次後續死亡、EDT max 4.984 ms、比賽完成
+seed 119 ：891 post-death ticks、510 次位置變化、47 次狀態變化、
+           9 次攻擊、3 次後續死亡、EDT max 4.711 ms、比賽完成
 ```
 
-因此誘敵者可以縮短反擊距離，但不會走進自己剛誘發的刺擊。敵人進入恢復後，懲罰者釋放攻擊並向前；只有真實碰撞成功才造成固定 100 傷害。
+三個 seed 的 `duplicateTransitionApplications`、`recursiveTransitionAttempts`、
+`deadReferencesAfterTransition`、`logicalFreezeReports`、`edtTicksOver50Ms`、
+`consoleLinesEmitted` 全部為 `0`。產生的三份報告可直接在 `out/debug` 檢查。
 
-## Dézonage／脫離原位的程式流程
-
-dézonage 不是單次 `Decision`，而是由 `dezoneTime` 維持的一段行為。現在分成「改變站位但保留目前對手」與「離開目前對手、轉刺另一名敵人」兩種。
-
-### 啟動
-
-空間 dézonage 要求敵人為 `NEUTRAL`、感知距離介於 1.30–2.80 m，而且 `dezoneCooldown` 已歸零：
-
-```text
-P(啟動) = floor((zoneExit + footwork + decisionMaking) / 3) / 1000
-duration = 0.55 + 0.005 × zoneExit + U(0, 0.45)
-initialCooldown = duration + U(0.80, 1.30)
-```
+### 3v3 動態接近——新里程碑 1：資料模型與持續性
 
-冷卻會在移動期間一起倒數，所以動作結束後仍須等待 0.80–1.30 秒，避免連續 dézonage 把雙方越推越遠。
+新接近系統先加入決策層，這一階段尚未修改速度或攻擊。`Group3ContactBand` 把距離狀態分成
+`FAR_APPROACH`、`SPACE_CONTEST`、`CONTACT`、`ACTIVE_EXCHANGE`。判斷會讀雙方 formation center
+距離、最近敵我距離、潛在接觸數，以及是否已有 attack/block 實體狀態。進入與離開門檻不同，
+形成 hysteresis；若突然出現真實近距離，FAR 可以直接進 CONTACT，不必多停一個 tick。
 
-### 移動模式
+`Group3v3Engagement` 現在為藍紅各保存一份 `Group3ApproachPlan`。物件內含：
 
 ```text
-P(BACKWARD | 啟動距離 ≤ 2.20 m) = 0.45 - 0.0035 × zoneExit
-P(ADVANCE | 非後退) = 0.45 + 0.004 × zoneExit
-P(ORBIT | 非後退) = 1 - P(ADVANCE | 非後退)
-P(左) = P(右) = 0.5
+ApproachPattern
+minimum/preferred/maximum duration
+lead/support/trailing FormationRole3
+lateralSign
+forward/lateral/depth commitment
+initialTeamCenter
+predictedMeetingPoint
+primaryReason
 ```
 
-實際向量：
+`predictedMeetingPoint` 先取雙方中心中點，再沿兩隊連線的垂直向量加入 `0.45–1.30 m` 的 lateral
+offset，最後用 arena 邊界修正。LEFT/RIGHT lead、sweep、oblique press、center delayed 與
+counter-rotate 都可被選到，沒有一般用途的直線模式。
 
-| 模式 | `forward` | `sideways` |
-| --- | ---: | ---: |
-| `BACKWARD` | -1.00 | 0 |
-| `ADVANCE_LEFT` | 0.70 | -0.70 |
-| `ADVANCE_RIGHT` | 0.70 | 0.70 |
-| `ORBIT_LEFT` | 0 | -1.00 |
-| `ORBIT_RIGHT` | 0 | 1.00 |
+選擇亂數不是主戰鬥 `Random`。程式以 match seed、Team 與 approach sequence 混合出獨立 Random，
+因此不會因為新增 approach plan 而改變後面的 stab/block 抽樣順序。同 seed 的 pattern、role、
+duration、meeting point 完全一致，但藍紅使用不同混合常數，不會被迫鏡像。plan 最短維持
+`1.2–1.8 s`、偏好 `2.0–3.4 s`、最長 `4.0–5.0 s`；只有可信 weapon threat、formation break、
+邊界危險或 durable isolation 可以提前中止。
 
-後退仍套用 0.62，所以會被前進追擊者逐漸追上。它只可在 2.20 m 內抽到；後退使距離到達 2.55 m 時，`moveAndTurn()` 會立刻改成左前或右前斜進，不再讓 dézonage 自己把距離拉到四、五公尺。斜進的向量長度約為 0.99，可一邊接近一邊改變角度。
+`Group3ApproachPlanTest` 的 A–E 測試涵蓋 lateral meeting point、三個不同暫時角色、跨越快速
+perception interval 的持續性、決定性、雙方獨立選擇、contact-band hysteresis，以及第一接觸
+不建立 DUEL。100 seeds 3v3 batch 與 2v2 的 28 項驗收全部通過。本里程碑只建立可測試的控制
+資料；下一里程碑才會把 plan 組合進 steering，因此目前不宣稱畫面軌跡已經改變。
 
-### 姿態
+### 3v3 動態接近——里程碑 2：轉向合成、速度與縱深
 
-令 `B = defenseTiming`、`O = attackTiming`、`T = 100 + B + O`：
+持續性的接近計畫現在會在 `FAR_APPROACH` 與 `SPACE_CONTEST` 期間真正影響 Agent 移動。
+`group3ApproachVelocity()` 會把計畫類型、前進／橫向投入程度、暫時角色，以及預測交會點，
+轉換為編隊座標中的速度向量。程式不會直接指定或瞬間改寫角色位置；結果仍會經過
+`integrateVelocity()`，因此步法造成的加速度、慣性、最高速度、後退減速、碰撞與場地邊界
+全部仍然有效。
 
-```text
-P(NEUTRAL) = 100 / T
-P(BLOCK) = B / T
-P(HOLD) = O / T
-```
+在遠距接近時，朝敵方的速度分量限制為 `0.78–1.05 m/s`，橫向分量為
+`0.28–0.58 m/s`。進入 `SPACE_CONTEST` 後，前進分量逐漸降為 `0.42–0.78 m/s`，橫向分量
+提高為 `0.42–0.72 m/s`。不同 `ApproachPattern` 只調整這兩個分量：掃掠增加橫移、反向旋轉
+犧牲部分前進速度、中央延遲稍微放慢接近。角色目前與 `predictedMeetingPoint` 的橫向距離也會
+調整橫移強度，但不會每個 tick 反轉計畫方向。
 
-`BLOCK` 在整段期間維持格擋；`HOLD` 會準備攻擊並停在保持狀態；`NEUTRAL` 只移動。接近競技場邊界時，`chooseDecision()` 會呼叫 `endDezone()` 並改成 `RECENTER`。
+暫時角色會形成柔性的前後層次。前導者的前進倍率是 `1.12`、支援者是 `1.00`、後隨者是
+`0.88`，三者平均仍維持團隊速度目標。縱深修正分別朝
+`+depthCommitment`、`+0.22 × depthCommitment`、`-0.68 × depthCommitment` 前進。這些數字只是
+有上限的 steering 偏向，不是強制座標；武器威脅、閃避、碰撞和邊界仍可使隊形自然變形。
 
-另一名 Agent 若距離大於 1.45 m，而且換位者不是 `HOLD`，每次決策可用：
+程式碼以 `Group3SteeringComposition` 明確保存每個來源：
 
 ```text
-P(跟進) = (aggression + decisionMaking) / 200
+desiredVelocity = approachContribution
+                + teamManeuverContribution
+                + localManeuverContribution
+                + formationContribution
+                + coverContribution
+                + avoidanceContribution
++ boundaryContribution
 ```
-
-選擇 `APPROACH` 跟隨。
 
-### 換目標脫離：離開目前的 vis-à-vis
+3v3 的隊友閃避會明確巡覽另外兩名仍存活的隊友，沒有沿用只認識一名隊友的 2v2 快捷邏輯。
 
-這個變體由 `findTargetSwitchDezoneTarget()` 尋找第二名敵人，不會取代原本的空間 dézonage。候選人必須目前可見、距離介於 0.90–3.20 m，並符合至少一種機會：正在和隊友交戰、處於 `RECOVERY`／`BLOCK_STUN`，或把背部實際露給 Agent。
-
-舊對手的安全距離使用帶誤差的距離控制估計。若舊對手仍有立即威脅，決策能力高的 Agent 會拒絕離開；決策失誤者可能仍然開始，之後被追擊或背刺。使用傾向的衍生能力為：
-
-```text
-S = round(0.35 × zoneExit
-        + 0.25 × decisionMaking
-        + 0.20 × footwork
-        + 0.10 × reaction
-        + 0.10 × aggression)
-```
+`FAR_APPROACH` 中，團隊機動／隊形／掩護修正的權重是 `0.18 / 0.32 / 0.28`；到
+`SPACE_CONTEST` 時提高為 `0.42 / 0.65 / 0.62`。一旦進入 `CONTACT`，或接近計畫因真實緊急
+狀況而取消，權重立即恢復 `1.0`，所以迫近的刺刀與真正破裂的隊形仍享有最高優先權。
+相反地，遠距離的 `RECOVER_FORMATION` 和 `COMPRESS` 門檻已放寬，暫時缺少一條掩護連線
+不會再把整隊立刻拉回中央。
 
-每次找到有效候選人時：
+`Group3v3Metrics` 會累加七種 contribution 的長度，能直接判斷遠距離時究竟是哪一套系統
+主導移動。`Group3ApproachSteeringTest` 的 A–G 測試涵蓋前進與橫移、前導者和後隨者的縱深、
+接近 contribution 的主導性、接觸時完整交還舊移動系統、同 seed 軌跡完全一致、實際速度
+落在指定區間，以及遠距掩護缺口不會誤觸恢復隊形。攻擊門檻、攻擊頻率、`TWO_VS_ONE`、
+2v2 與人數轉換系統都沒有修改。
 
-```text
-P(開始換目標脫離) = min(0.11, (0.012 + 0.065 × (S / 100)²) × 戰術倍率)
+### 3v3 第一接觸——里程碑 3：事件紀錄與平直前線稽核
 
-防守 = 0.65
-中立 = 1.00
-進攻 = 1.35
-```
+程式現在會區分整體進入 `CONTACT` 距離帶，以及每一名 Agent 自己的第一次實體接觸。
+角色完成移動後，`measureGroup3FirstContacts()` 會尋找最近的存活敵人；實際距離小於或等於
+`2.95 m` 時，建立不可變的 `FirstContactEvent`，保存 Agent、當時最近的敵人、模擬時間、
+`FormationRole3`、真實距離和是否具有足夠實體掩護。每名 Agent 只會建立一次，因此之後換
+目標不會改寫第一接觸的歷史證據。
 
-`beginTargetSwitchDezone()` 不會立刻呼叫 `changeTarget()`。它先保存：
+時間差使用以下公式：
 
 ```text
-dezoneOriginalTarget = 原本的 vis-à-vis
-dezoneSwitchTarget = 計畫攻擊的第二名敵人
-dezoneSwitchCommitted = false
-transferTime = 0.72 - 0.0025 × S + U(0, 0.20)
+firstContactSpread = 最後一名 Agent 的第一接觸時間
+                   - 最早的第一接觸時間
 ```
-
-這段時間的世界移動仍以舊對手為朝向來源：
-
-| 模式 | `forward` | `sideways` |
-| --- | ---: | ---: |
-| `TARGET_SWITCH_LEFT` | 0.55 | -0.85 |
-| `TARGET_SWITCH_RIGHT` | 0.55 | +0.85 |
-
-正確側的操作率為 `0.30 + 0.0068 × S`，低能力者可能從較差的一側穿越。姿態仍從 `NEUTRAL`、`BLOCK`、`HOLD` 中選擇，所以 Agent 可以保持格擋或蓄刺離開舊對手。此時正式 `target` 尚未改變；畫面保留指向舊對手的圓形虛線，另以較明顯、終點為方框的虛線顯示計畫目標，角色上方顯示 `CHANGEMENT CIBLE`／「換目標脫離」。
 
-計時結束後，`commitTargetSwitchDezone()` 才執行：
+另一個 `0.12 s` 的滑動視窗會計算同時發生的第一接觸最大數量，分別更新
+`simultaneousThreePlayerContacts` 與 `simultaneousSixPlayerContacts`。這只是觀測資料，不會為了
+製造錯開效果而強迫任何 Agent 等待。
 
-1. 新目標必須仍然存活且可見。
-2. 呼叫 `changeTarget()` 並鎖定 1.10 秒。
-3. 原本格擋者改成 `ATTACK_PREPARE`；已在 `HOLD` 者重新瞄準新目標。
-4. `DEZONE_SWITCH_ATTACK` 讓 Agent 向新目標前進並按正常距離、角度與攻擊時機釋放。
-5. 如果隊友正在攻擊同一目標，而且自己的決策操作成功，就選隊友攻擊的相反高度，讓高段＋低段的 Double Block 情況自然出現。
+第一個事件出現以前，`measureGroup3PreContactGeometry()` 會累加雙方中心的前進和橫向位移、
+平均寬度、平均與最大縱深、相對初始中線的偏移，以及雙方路徑相關性。因為兩隊朝相反方向
+接近，所以相關性定義為：
 
-### 舊對手追擊與中止
-
-`updateTargetSwitchDezone()` 只在舊對手仍可見，且新刺擊尚未進入有效期時檢查 `dezoneOriginalTarget`。以下任一情況持續超過反應延遲就中止：
-
 ```text
-舊對手攻擊中、刺刀朝向誤差 < 34°，且距離進入其預計刺擊長度 + BODY_RADIUS + 0.52 m
-或
-舊對手仍以自己為 target，且追到 1.42 m 內
-
-中止延遲 = 0.07 + (100 - reaction) × 0.0028 秒
+teamPathCorrelation = -dot(normalize(blueDelta), normalize(redDelta))
 ```
 
-正面攻擊會令 Agent 回頭普通格擋；舊對手已在背後時改走護背；只是追近時顯示中止並後退。反應較慢者可能在中止前真正被刺中。新刺擊一旦進入 `ATTACK_ACTIVE` 就無法取消，舊對手此時打中背部仍按正常 backstab 規則處理。新目標死亡、離開視野、Agent 被命中、攻擊被格擋或進入恢復時，也會清除這次換目標流程。
+數值接近 `1` 代表世界座標方向相反，但兩隊軌跡幾乎完全鏡像。程式也分開保存抵達
+`SPACE_CONTEST`、第一次接觸和第一次攻擊所需的時間。
 
-## 選單與隊伍建立頁如何運作
+`FlatFrontConvergenceAudit` 會在六人都有事件、最早事件發生 `1.50 s` 後，或淘汰即將引發
+人數轉換以前完成。它組合六項訊號：
 
-### `MenuPanel` 的兩種頁面
-
-`MenuPanel.Page` 只有 `MAIN` 和 `PLAY`。兩頁共用同一套背景、中央卡片、語言按鈕、主要按鈕與次要按鈕；`updateLanguage()` 再依 `page` 決定文字。這避免主選單與模式頁各自複製一套導覽程式。按鈕不直接依賴 `Main`，只送出以下動作：
-
 ```text
-MAIN：PLAY / QUIT
-PLAY：FRIENDLY_MATCH / BACK
+橫向位移 < 0.55 m
+平均縱深 < 0.28 m
+至少四個接觸集中在 0.18 s 內
+路徑相關性 > 0.88
+平均中線偏移 < 0.32 m
+接近時間 > 4.20 s
 ```
-
-`addNotify()` 把主要按鈕設為 root pane 的 default button，所以 Enter 可以前進。模式頁另外把 Esc 綁定為 `BACK`；`L` 則在兩頁呼叫 `toggleLanguage()`。畫面固定偏好尺寸為 `1000 × 650`，不會因為內容較少而被 `pack()` 壓成很小的視窗。
 
-### `SetupPanel` 建立兩支隊伍
+至少三項成立才會標記為可疑。`reason` 仍會保留所有成立的原因，即使總數不足三項。
+這個 audit 不會修改目標、計畫、速度或攻擊決策，只用來找出畫面表現平淡的 seed。
 
-`SetupPanel` 使用 `BorderLayout` 分成步驟標題、隊伍分頁與底部按鈕。中央 `JTabbedPane` 有藍隊和紅隊兩頁；每頁上方是隊名輸入框，下方用 `GridLayout(1, 2)` 放入兩個 `PlayerEditorPanel`。四名玩家因此共用完全相同的名稱、戰術與能力欄位，不會因為維護四套表單而逐漸不一致。標題區右上角另放語言按鈕；也可以按 `L` 呼叫 `toggleLanguage()`，按 Esc 則透過 `BackHandler` 回到模式頁。
+`Group3FirstContactAuditTest` 驗證翼側—中央—後線依序接觸、六人平直同步接觸、始終維持單一
+`GROUP_3V3` 而不建立 `DUEL`，以及完全決定性。100 場測試結果為：
+`approachAudits=100`、`flatFrontConvergences=1`、`simultaneousSixPlayerContacts=15`、平均接觸
+時間差 `0.669 s`、平均接觸前橫移 `0.787 m`，且沒有 timeout、freeze、越界、死亡引用或
+決定性失敗。
 
-步驟列、標題、副標題、隊名標籤、分頁名稱、返回／開始按鈕、提示及錯誤視窗標題由 `SetupPanel.updateLanguage()` 一次更新。接著分別對 `blueOneEditor`、`blueTwoEditor`、`redOneEditor` 與 `redTwoEditor` 呼叫 `setLanguage(language)`：
+### 3v3 接近畫面驗證——里程碑 4
 
-- `JOUEUR BLEU 1/2`／「藍方玩家 1/2」與 `JOUEUR ROUGE 1/2`／「紅方玩家 1/2」；
-- `Nom du joueur`／「玩家名稱」；
-- `Tactique`／「戰術」；
-- 十一項能力的中法名稱；
-- `JComboBox` 透過 renderer 呼叫 `Tactic.label(language)`，所以防守、中立與進攻也會立即翻譯。
+`ApproachVisualValidationCapture` 會以 `1/120 s` 的物理步長重播 seed `41`、`73`、`119`，也就是
+遊戲 `1×` 速度使用的模擬時間。每個 seed 執行兩次：一次使用目前正式接近系統，另一次只在
+畫面驗證中關閉 `Group3ApproachPlan` 的 movement contribution，重建里程碑以前的 baseline。
+這個開關不會出現在遊戲介面，也沒有重新啟用 `FRONT_LINE` 或舊 controller；雙方仍使用相同
+seed、Agent、攻擊和碰撞系統。
 
-每個能力欄使用：
+可重現指令：
 
-```java
-new JSpinner(new SpinnerNumberModel(defaultValue, 1, 100, 1))
+```powershell
+java '-Djava.awt.headless=true' -cp .\out ApproachVisualValidationTest
 ```
 
-模型本身限制最小值 1、最大值 100、每次箭頭增減 1。戰術以 `JComboBox<Tactic>` 選擇。按下「開始比賽」時，`configuration()` 先對所有 spinner 執行 `commitEdit()`，接著檢查玩家名稱，再依固定順序建立 `AgentStats`、戰術與 `AgentConfiguration`。`teamConfiguration()` 同時驗證 1–24 字元的隊名，最後把兩名玩家包成：
+每個版本會在 `0.00`、`0.40`、`0.80`、`1.20`、`1.60`、`2.00`、`2.40`、`2.80 s` 擷取八個
+畫面，標示距離帶、個別第一接觸數量、隊形折線、身體、刺刀方向和基本武器狀態。軌跡則每
+`0.05 s` 取樣一次。輸出位置：
 
-```java
-record TeamConfiguration(String name, AgentConfiguration firstPlayer, AgentConfiguration secondPlayer)
-```
-
 ```text
-JOUER LE MATCH／開始比賽
-→ teamConfiguration(藍隊名, blueOneEditor, blueTwoEditor)
-→ teamConfiguration(紅隊名, redOneEditor, redTwoEditor)
-→ 有錯：JOptionPane 顯示原因，留在設定頁
-→ 正確：StartHandler 接收 TeamConfiguration × 2 與目前 UiLanguage
-```
-
-「JOUER LE MATCH」／「開始比賽」也是這一頁的預設按鈕，因此可按 Enter 啟動。隊名空白或超過 24 字元、玩家名稱空白或超過 18 字元、能力值格式錯誤時，訊息都會使用設定頁目前的語言。
-
-### 設定如何進入戰鬥與重新開始
-
-`Main.showCombat()` 把兩份 `TeamConfiguration` 直接交給 `MapPanel(blueTeam, redTeam, language, menuHandler)`。`MapPanel` 保存兩個隊名與設定頁傳來的語言，把隊名畫在戰鬥標題和勝利訊息，再取出四名玩家建立 `DuelSimulation`。模擬器只需把藍、紅各兩份 `AgentConfiguration` 保存成陣列；`reset()` 依照隊伍、出生位置與不同隊員顏色重建四名 `Musketeer`：
-
-```java
-blueTeam = new Musketeer[]{
-    createAgent(blueConfigurations[0], BLUE_TEAM, blueOneColor, 1.65, 2.45, 0),
-    createAgent(blueConfigurations[1], BLUE_TEAM, blueTwoColor, 1.65, 4.55, 0)
-};
+out/approach-validation-3v3/seed-<seed>/
 ```
 
-輸入名稱同時作為法文與中文顯示名稱，所以切換語言不會把隊名或玩家名稱改掉。按 `R` 時只重建 HP、位置、狀態與計時器；姓名、能力和戰術仍取自原本設定。戰鬥資訊面板生命值右側會顯示 `T : Défensive` 等目前戰術；中文則顯示「戰術：防守」。按 `MENU` 或 Esc 時，`returnToMenu()` 先停止 timer，再把目前語言交還 `Main`；`removeNotify()` 是第二層保護，確保 panel 被替換時 timer 一定停止。
+每個資料夾包含 `old-contact-sheet.png`、`new-contact-sheet.png`、新舊軌跡、兩張合併比較圖，
+以及 `approach.txt`、`first-contact.txt`、`flat-front-audit.txt`。另外保留 `old-*` 與 `new-*`
+文字報告，方便逐項比較。
 
-## 畫面如何讀取模型
+實際結果：
 
-### `MapPanel.paintComponent()`
+| Seed | 第一次接觸 baseline → 新版 | Spread baseline → 新版 | 橫移 baseline → 新版 | 縱深 baseline → 新版 |
+|---:|---:|---:|---:|---:|
+| 41 | `3.467 → 1.608 s` | `0.092 → 0.192 s` | `0.101 → 0.774 m` | `0.009 → 0.382 m` |
+| 73 | `3.475 → 1.658 s` | `0.083 → 0.475 s` | `0.086 → 0.914 m` | `0.015 → 0.476 m` |
+| 119 | `3.467 → 1.367 s` | `0.092 → 1.183 s` | `0.103 → 0.682 m` | `0.009 → 0.201 m` |
 
-畫面每次重繪會：
+三個 baseline 都被判定為平直，而且六名 Agent 在 `0.12 s` 視窗內同步接觸；三個新版都不是
+可疑平直接近，也沒有六人同步接觸。seed 119 的平均縱深較小，但接觸時間差最大，而且畫面仍
+有清楚曲線。因此本里程碑選擇保留里程碑 2 的參數；只為 seed 119 繼續提高縱深，反而可能
+使 seed 41、73 的隊形變得僵硬，並造成針對小樣本的過度調整。
 
-1. 計算競技場能放進中央區域的 `scale`。
-2. 呼叫 `paintArena()` 畫場地與公尺格線。
-3. 呼叫 `paintTargetLines()` 畫四名 Agent 指向目前目標的圓形終點虛線，並在換目標 dézonage 時畫出方形終點的計畫線。
-4. 呼叫四名 `Musketeer.paint()`。
-5. 左右各堆疊兩張 `paintAgentInfo()` 資訊卡。
-6. 畫隊伍勝負標題、圖例、暫停遮罩與操作說明。
+`ApproachVisualValidationTest` 會檢查所有檔案與完整解析度，並要求每個 seed 都必須更快接觸、
+具有更大的 spread、至少四倍橫移、至少八倍縱深，而且 audit 必須從平直轉為非可疑。
 
-資訊面板直接讀取 Agent 欄位，不另建 ViewModel，例如：
+### 3v3 接近系統最終驗收——里程碑 5
 
-```java
-agent.stats.footwork()
-agent.state.label(language)
-agent.decision.label(language)
-Math.hypot(enemy.x - agent.x, enemy.y - agent.y)
-```
-
-四張資訊卡為了同時放進畫面而使用雙欄能力值；左欄第六列顯示新增的「雙重格擋」，下方仍顯示狀態、決策、目前目標、距離、攻防方向、瞄準部位與實際高度。「角度 水／垂／刺」依序是身體水平角、刺刀垂直角及刺刀相對身體的左右角，因此 2v2 中仍能確認角色是否真正朝向目標，以及刺刀正偏向左或右。
-
-### `Musketeer.paint()`
-
-繪製順序大致是：
-
-1. 平移到 Agent 世界位置，以 `movementHeading` 畫半透明綠色速度箭頭。
-2. 依 `angle + weaponYaw` 畫準備攻擊的前方射程弧。
-3. 旋轉身體 `angle`；若 `backExposed` 成立，在身體後方的 `115°–245°` 畫紅色弧線。
-4. 再旋轉相對的 `weaponYaw`，依戰鬥狀態畫刺刀或格擋姿勢。
-5. 恢復身體 transform，畫圓形、白色面向線與頭腿標記。
-6. 恢復世界 transform，在攻擊有效期畫前後刺刀尖端間的淡黃掃掠線，再畫方向、訊息與格擋火花。
-
-### 普通攻防的視覺狀態
-
-`Musketeer.isBasicAttack()` 用來區分普通攻擊與 Chamber、誘敵中計、誘敵懲罰及識破前壓。只有普通攻擊使用新的黃／橙色階，特殊動作仍保留原本的方向顏色與浮動訊息：
-
-| 狀態 | 刺刀顯示 | 上方文字 |
-| --- | --- | --- |
-| `NEUTRAL` | 金屬灰 | 無 |
-| `ATTACK_PREPARE`／`ATTACK_HOLD` | 淡黃色脈動光暈 | `PRÊT`／「準備」 |
-| `FEINT` | 淡黃色武器與紫色意圖文字 | `FEINTE`／「變招」 |
-| `ATTACK_ACTIVE` | 粗亮黃色核心、寬光暈與尖端掃掠線 | `ATTAQUE`／「攻擊」；變速時追加 `ACCEL`／「加速刺」或 `DRAG`／「延遲刺」 |
-| `RECOVERY` | 暗橙色，結束後回到金屬灰 | `RÉCUP.`／「恢復」 |
-| `BLOCK_PREPARE` | 低透明度青色光暈，尚未生效 | `PARADE…`／「準備格擋…」 |
-| `BLOCKING` | 青色寬光暈包住原本的上段橙／下段青／側擋紫核心 | `PARADE`／「格擋」 |
-| `DOUBLE_BLOCK` | 同一把格擋刺刀先保留第一方向，再切成第二方向；上方使用紫色 `⇅` | `DOUBLE PARADE`／「雙重格擋」；成功後顯示 `DOUBLE BLOCK !`／「雙重格擋！」 |
-
-光暈不是另一把武器，而是同一條刺刀線先用較寬的透明筆畫繪製，再用較窄的實色核心覆蓋。普通攻擊有效期的光暈寬度是基準線寬的 3.8 倍，核心為 1.55 倍，因此即使四名 Agent 相距較遠，也能直接看出哪一把刺刀正在真正造成傷害。
-
-資訊卡的狀態後面會附加 `EngagementPhase` 中法標籤；攻防方向列在有效攻擊時再附加 `AttackManipulation`。因此觀戰者不用猜測 Agent 是正在試探、穿越或重整，也能分辨這次黃色普通刺究竟是一般、Accel 或 Drag。
-
-### 前方射程弧
-
-普通攻擊處於準備或保持時，`paintAttackRange()` 會在刺刀朝向前方 `±55°` 畫淡黃色虛線弧。半徑為：
+最後一個里程碑沒有再加入新的 AI 行為，而是固定里程碑 4 選定的參數，並以遊戲實際程式碼
+執行完整驗證。可重現順序如下：
 
-```text
-射程弧半徑 = projectedThrustLength() + BODY_RADIUS
+```powershell
+javac -encoding UTF-8 -d .\out .\src\*.java
+java '-Djava.awt.headless=true' -cp .\out ApproachVisualValidationTest
+java -cp .\out Group3FirstContactAuditTest
+java -cp .\out Group3ApproachSteeringTest
+java -cp .\out Group3ApproachPlanTest
+java -cp .\out Experimental3v3TransitionTest
+java -cp .\out Experimental3v3BatchTest 100
+java -cp .\out Experimental3v3BatchTest 500
+java -cp .\out FinalAcceptanceTest 500
 ```
-
-加上 `BODY_RADIUS` 是因為命中條件不是刺刀尖端剛好到達敵人中心，而是尖端進入敵人的身體圓。敵人中心在弧外時，即使立即釋放也不可能碰到；進入弧內後仍須同時符合刺刀水平角、攻擊高度及格擋判定。弧線只在普通攻擊準備／保持期間出現，而且透明度隨 `sin(stateTime × 10)` 輕微脈動，避免四人畫面長期充滿範圍圈。
-
-### 成功格擋火花
 
-`checkHit()` 確認格擋方向與 `75°` 朝向條件都成立時，除了令攻擊者進入 `BLOCK_STUN`，也會保存：
+500 場 3v3 結果：
 
 ```text
-blockSparkTime = 0.22 秒
-blockSparkX/Y  = 攻擊者當下的刺刀尖端世界座標
-```
-
-`paintBlockSpark()` 在該接觸點畫八道向外擴張的黃白火花，並依剩餘時間淡出。這讓普通格擋的成功瞬間不必只靠資訊卡或攻擊者的紅色 `✕` 判讀。
-
-浮動訊息直接由計時欄位控制：
-
-| 欄位 | 畫面文字 |
-| --- | --- |
-| `hitMessageTime` | 部位與傷害 |
-| `chamberMessageTime` | 法文顯示 `CHAMBER !`／`CHAMBER ×N`；中文顯示「接招反擊！」／「連續接招反擊 ×N！」／「完美接招反擊！」 |
-| `baitTime` | `APPÂT ←/→`／`誘敵 ←/→` |
-| `baitTrapMessageTime` | `PIÉGÉ !`／`中計！` |
-| `punishMessageTime` | `PUNITION !`／`懲罰！` |
-| `baitAdvanceMessageTime` | `CONTRE-APPÂT !`／`識破前壓！` |
-| `dezoneTime` | 空間換位顯示 `DÉZONAGE`／「脫離原位」；換目標移動顯示 `CHANGEMENT CIBLE`／「換目標脫離」 |
-| `blockSparkTime` | 成功格擋接觸點的黃白火花 |
-| `doubleBlockMessageTime` | 雙重格擋第二次接觸成功後顯示 `DOUBLE BLOCK !`／「雙重格擋！」 |
-| `backExposed` | 身體後方紅弧與 `DOS EXPOSÉ`／「背部暴露」 |
-| `backstabMessageTime` | `BACKSTAB !`／「背刺！」 |
-
-資訊卡的距離同行另外顯示 `Dos : B`／「護背：B」。目前處於背部暴露時，這個數字會轉成紅色；它顯示的是衍生能力，不是額外的生命值或背刺抵抗率。
-
-當 Agent 主動利用露背機會時，資訊卡決策欄顯示 `Opportunité de backstab`／「背刺機會」。刺刀仍沿用普通攻擊的準備、黃色有效期及橙色恢復視覺，因為它仍是一支必須經過正常幾何碰撞的普通刺擊；真正碰到背部後才顯示 `BACKSTAB !`／「背刺！」。
-
-## 中法介面如何實作
-
-`UiLanguage` 只有兩個值：
-
-```java
-enum UiLanguage {
-    FRENCH, CHINESE;
-
-    String text(String french, String chinese) {
-        return this == FRENCH ? french : chinese;
-    }
-}
-```
-
-各 enum 自己保存中法標籤，例如 `CombatState`、`Decision`、`HitZone`。`MenuPanel` 更新主選單與模式頁，`SetupPanel` 和 `PlayerEditorPanel` 更新隊伍建立頁，`MapPanel.text()` 則把戰鬥畫面的呼叫轉給目前的 `language`。
-
-程式啟動時預設語言是法文，但每一頁都可以立即切成中文：
-
-```java
-showMainMenu(UiLanguage.FRENCH);
-```
-
-語言按鈕顯示的是「可以切換過去的語言」，所以法文畫面按鈕寫 `中文`，中文畫面按鈕寫 `Français`。`MenuPanel.MenuHandler`、`SetupPanel.StartHandler`、`SetupPanel.BackHandler` 和 `MapPanel.MenuHandler` 的參數都包含 `UiLanguage`，所以前進或返回不會突然跳回法文。
-
-程式內部仍使用 `chamber`、`CHAMBER_PREPARE` 等英文識別字，但中文介面的能力名稱、狀態、決策與浮動訊息全部使用「接招反擊」，不會再把 `CHAMBER` 英文直接顯示給中文介面使用者。
-
-## 常見擴充位置
-
-### 修改 Agent 能力
-
-一般使用者直接在戰前設定視窗修改。若要改程式啟動時顯示的預設值，修改 `AgentConfiguration.defaultBlue()`、`defaultBlueTwo()`、`defaultRed()` 與 `defaultRedTwo()`；必須按照 `AgentStats` record 的十一個欄位順序填寫。
-
-### 新增能力值
-
-至少需要同步修改：
-
-1. `AgentStats` record。
-2. `AgentConfiguration` 的預設值。
-3. `PlayerEditorPanel` 的標籤、預設值陣列與 `configuration()` 索引。
-4. 實際使用該能力的 AI 或物理公式。
-5. `MapPanel.paintAgentInfo()`。
-6. 中法 README。
-
-只把數字加到面板而不接入規則，不會改變 Agent 行為。
-
-### 新增 AI 決策
-
-至少檢查：
-
-1. `Decision` 的中法標籤。
-2. `chooseDecision()` 在什麼條件選擇它。
-3. `moveAndTurn()` 是否需要把它轉成移動向量。
-4. 是否需要新增持續旗標或計時器，而不是每 0.1 秒重新抽一次。
-
-dézonage 就是持續行為的例子：`Decision` 只負責顯示目前意圖，空間換位由 `dezoneTime`、`dezoneMovement` 與 `dezoneStance` 維持；換目標變體再使用 `dezoneOriginalTarget`、`dezoneSwitchTarget` 與 `dezoneSwitchCommitted` 保存跨越、承諾與攻擊階段。
-
-### 新增攻擊方向
-
-除了 `CombatDirection`，也需要修改：
-
-- `BlockDirection.blocks()` 與 `matching()`。
-- `beginAttack()` 的方向選擇。
-- 格擋失誤邏輯。
-- `Musketeer.paint()` 的武器姿勢。
-- `MapPanel` 圖例。
-
-### 大量無畫面模擬
-
-可以直接建立 `DuelSimulation` 並重複呼叫：
-
-```java
-var simulation = new DuelSimulation();
-while (simulation.winningTeam < 0) simulation.update(1.0 / 120.0);
+matchesCompleted=500
+timeouts=0
+blueWins=254
+redWins=246
+transitionRequests=1577
+transitionApplications=1577
+deadReferencesAfterTransition=0
+logicalFreezeReports=0
+transitionFailsafePauses=0
+approachAudits=500
+flatFrontConvergences=1
+simultaneousSixPlayerContacts=49
+averageFirstContactSpread=0.738 s
+averagePreContactLateralDistance=0.787 m
+averagePreContactDepth=0.305 m
+averageTimeToFirstContact=1.497 s
+averageTimeToFirstAttack=4.482 s
+invalidPositions=0
+arenaExits=0
+determinismFailures=0
+consoleLinesEmitted=0
 ```
 
-目前類別位於預設 package，欄位也多為 package-private，適合原型測試，但正式工具最好新增公開的結果查詢 API，並把隨機種子注入建構子以便重現比賽。
+500 場 2v2 也完成 `500/500`，沒有 timeout、stalemate、無效位置、越界、thrashing 或決定性
+失敗。`FinalAcceptanceTest` 的 28 項全部通過，包含第一名死亡以前保持 groupfight、死亡後實體
+交接至 `TWO_VS_ONE`、完整死亡因果鏈，以及舊系統啟用次數為零。
 
-## 目前程式限制
+接近系統 28 項需求和程式證據如下：
 
-- 目前固定為 2v2，尚未提供 2v1、3v3 或任意隊伍人數。
-- 已有個人目標選擇、立即威脅換目標、簡單支援和隊友避讓，但還沒有隊長命令、陣形或團隊層級戰術。
-- 只有上下段刺擊；已有 feint、drag、accel，但尚無 kick、橫斬或其他武器攻擊。
-- 身體碰撞仍是二維圓形；部位只有連續高度，沒有完整三維骨架。
-- `Musketeer` 同時負責資料與繪圖，模型／顯示尚未完全分離。
-- `Random` 在 `DuelSimulation` 內直接建立，外部目前無法指定種子。
-- AI 是依優先順序與機率撰寫的規則系統，不是訓練出的模型。
-- 沒有存檔、訓練、招募、隊伍管理、聯賽或錦標賽。
+1. Watchdog 沒有誤報：`logicalFreezeReports=0`。
+2. 正常模式沒有 console 洗版：`consoleLinesEmitted=0`。
+3. 轉換維持交易式：`1577` 次要求對應 `1577` 次套用。
+4. 2v2 通過 500 場完整驗收。
+5. `TWO_VS_ONE` 的 B–F 測試保持通過。
+6. 第一次接觸平均為 `1.497 s`。
+7. 接觸前平均橫移為 `0.787 m`。
+8. 藍紅使用彼此獨立的衍生 RNG。
+9. 暫時角色允許一側成為前導。
+10. 接觸前平均縱深為 `0.305 m`。
+11. 500 場中只有一場被 audit 判為平直。
+12. 只有 49 場的六名 Agent 在 `0.12 s` 視窗內同步接觸。
+13. 遠距掩護缺口不會立刻強制恢復隊形。
+14. 真實緊急狀況取消 plan 後，所有實體防禦權重恢復為 `1.0`。
+15. 有限注意力及其延遲沒有修改。
+16. 攻擊仍必須經過 `AttackOpportunity`。
+17. 接近 plan 本身不會呼叫刺擊。
+18. Revenge 沒有重新校準。
+19. Counter-cover 沒有重新校準。
+20. 傷害、武器碰撞與格擋仍使用實體判定。
+21. Cluster 仍然只是描述局部幾何。
+22. 第一接觸測試確認不會建立固定 `DUEL`。
+23. 沒有針對 seed 寫 AI；41、73、119 只作為畫面捕捉輸入。
+24. Plan 具有持續時間，而且測試沒有發現 thrashing。
+25. 100 與 500 場 batch 的決定性重播全部通過。
+26. 死亡後的交易式轉換與圖形比賽仍會繼續。
+27. 3v3 和 2v2 驗收的 100、500 場測試皆通過。
+28. 法文與中文 README 都詳細說明資料模型、公式、測試和結果。
 
-這些限制不妨礙目前的核心目標：讓四名能力不同的 Agent 使用同一套可觀看、可追蹤、以實際幾何和時間判定結果的刺刀團隊戰程式。
+接近系統開發期間沒有修改被凍結的轉換系統、`GROUP_2V2`、`TWO_VS_ONE`、攻擊門檻、攻擊
+時間、格擋、傷害、revenge 或 counter-cover。唯一的替代路徑是畫面捕捉用 baseline；它預設
+關閉，正常遊戲和 UI 都無法啟用。

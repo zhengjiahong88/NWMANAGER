@@ -1,0 +1,4 @@
+enum RatingProfile {
+    MODERN,
+    LEGACY
+}

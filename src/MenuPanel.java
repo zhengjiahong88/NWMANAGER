@@ -6,13 +6,14 @@ import java.awt.event.ActionEvent;
 @SuppressWarnings("serial")
 final class MenuPanel extends JPanel {
     enum Page { MAIN, PLAY }
-    enum MenuAction { PLAY, FRIENDLY_MATCH, BACK, QUIT }
+    enum MenuAction { PLAY, FRIENDLY_MATCH, EXPERIMENTAL_3V3, BACK, QUIT }
 
     private final Page page;
     private final MenuHandler handler;
     private final JLabel sectionLabel = new JLabel(), titleLabel = new JLabel(), subtitleLabel = new JLabel(),
             modeTitleLabel = new JLabel(), modeDescriptionLabel = new JLabel(), footerLabel = new JLabel();
-    private final JButton languageButton = new JButton(), primaryButton = new JButton(), secondaryButton = new JButton();
+    private final JButton languageButton = new JButton(), primaryButton = new JButton(),
+            experimentalButton = new JButton(), secondaryButton = new JButton();
     private UiLanguage language;
 
     MenuPanel(Page page, UiLanguage language, MenuHandler handler) {
@@ -25,7 +26,7 @@ final class MenuPanel extends JPanel {
 
         var topBar = new JPanel(new BorderLayout());
         topBar.setOpaque(false);
-        var brand = new JLabel("NWMANAGER  /  2v2");
+        var brand = new JLabel("NWMANAGER  /  2v2 + 3v3");
         brand.setFont(brand.getFont().deriveFont(Font.BOLD, 14f));
         brand.setForeground(new Color(69, 59, 49));
         topBar.add(brand, BorderLayout.WEST);
@@ -41,7 +42,7 @@ final class MenuPanel extends JPanel {
         card.setBorder(BorderFactory.createCompoundBorder(
                 BorderFactory.createLineBorder(new Color(166, 139, 99), 1, true),
                 new EmptyBorder(35, 48, 39, 48)));
-        card.setPreferredSize(new Dimension(510, page == Page.MAIN ? 430 : 480));
+        card.setPreferredSize(new Dimension(510, page == Page.MAIN ? 430 : 520));
         card.setMaximumSize(card.getPreferredSize());
 
         configureLabel(sectionLabel, Font.BOLD, 12f, new Color(151, 91, 43));
@@ -76,6 +77,13 @@ final class MenuPanel extends JPanel {
         primaryButton.addActionListener(event -> handler.handle(
                 page == Page.MAIN ? MenuAction.PLAY : MenuAction.FRIENDLY_MATCH, this.language));
         card.add(primaryButton);
+        if (page == Page.PLAY) {
+            card.add(Box.createVerticalStrut(10));
+            configureButton(experimentalButton, new Color(63, 94, 139), Color.WHITE, 400, 46);
+            experimentalButton.addActionListener(event ->
+                    handler.handle(MenuAction.EXPERIMENTAL_3V3, this.language));
+            card.add(experimentalButton);
+        }
         card.add(Box.createVerticalStrut(12));
         configureButton(secondaryButton, new Color(225, 211, 188), new Color(69, 59, 49), 400, 42);
         secondaryButton.addActionListener(event -> handler.handle(
@@ -163,6 +171,7 @@ final class MenuPanel extends JPanel {
                 "建立兩支隊伍，進行一場不影響戰績的比賽。"));
         primaryButton.setText(language.text(main ? "JOUER" : "PRÉPARER LE MATCH",
                 main ? "開始遊戲" : "準備比賽"));
+        experimentalButton.setText(language.text("MATCH EXPÉRIMENTAL 3v3", "實驗 3v3 比賽"));
         secondaryButton.setText(language.text(main ? "QUITTER" : "RETOUR",
                 main ? "離開遊戲" : "返回"));
         languageButton.setText(language == UiLanguage.FRENCH ? "中文" : "Français");

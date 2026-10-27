@@ -8,18 +8,26 @@ record AgentConfiguration(String name, AgentStats stats, Tactic tactic) {
     }
 
     static AgentConfiguration defaultBlue() {
-        return new AgentConfiguration("Agent bleu 1", new AgentStats(90, 90, 90, 90, 90, 90, 90, 90, 90, 90, 90), Tactic.NEUTRAL);
+        return new AgentConfiguration("Agent bleu 1", new AgentStats(90, 90, 90, 90, 90, 90, 90, 90, 90, 90, 90, 90, 25, 75), Tactic.NEUTRAL);
     }
 
     static AgentConfiguration defaultBlueTwo() {
-        return new AgentConfiguration("Agent bleu 2", new AgentStats(90, 90, 90, 90, 90, 90, 90, 90, 90, 90, 90), Tactic.DEFENSIVE);
+        return new AgentConfiguration("Agent bleu 2", new AgentStats(90, 90, 90, 90, 90, 90, 90, 90, 90, 90, 90, 90, 25, 75), Tactic.DEFENSIVE);
+    }
+
+    static AgentConfiguration defaultBlueThree() {
+        return new AgentConfiguration("Agent bleu 3", new AgentStats(90, 90, 90, 90, 90, 90, 90, 90, 90, 90, 90, 90, 25, 75), Tactic.NEUTRAL);
     }
 
     static AgentConfiguration defaultRed() {
-        return new AgentConfiguration("Agent rouge 1", new AgentStats(90, 90, 90, 90, 90, 90, 90, 90, 90, 90, 90), Tactic.NEUTRAL);
+        return new AgentConfiguration("Agent rouge 1", new AgentStats(90, 90, 90, 90, 90, 90, 90, 90, 90, 90, 90, 90, 25, 75), Tactic.NEUTRAL);
     }
 
     static AgentConfiguration defaultRedTwo() {
-        return new AgentConfiguration("Agent rouge 2", new AgentStats(90, 90, 90, 90, 90, 90, 90, 90, 90, 90, 90), Tactic.AGGRESSIVE);
+        return new AgentConfiguration("Agent rouge 2", new AgentStats(90, 90, 90, 90, 90, 90, 90, 90, 90, 90, 90, 90, 25, 75), Tactic.AGGRESSIVE);
+    }
+
+    static AgentConfiguration defaultRedThree() {
+        return new AgentConfiguration("Agent rouge 3", new AgentStats(90, 90, 90, 90, 90, 90, 90, 90, 90, 90, 90, 90, 25, 75), Tactic.DEFENSIVE);
     }
 }

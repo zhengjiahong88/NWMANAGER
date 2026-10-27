@@ -6,17 +6,25 @@ import java.text.ParseException;
 final class PlayerEditorPanel extends JPanel {
     private static final String[] FRENCH_STAT_LABELS = {
             "Jeu de jambes", "Contrôle de distance", "Précision", "Timing attaque", "Timing défense",
-            "Réaction", "Agressivité", "Décision", "Sortir de sa zone", "Chamber", "Double Block"
+            "Réaction", "Agressivité", "Décision", "Dézonage", "Chamber", "Double Block", "Pression",
+            "Volonté de 50/50", "Collectif"
     };
     private static final String[] CHINESE_STAT_LABELS = {
             "步法", "距離控制", "瞄準精度", "進攻時機", "防守時機",
-            "反應速度", "攻擊性", "決策能力", "脫離原位", "接招反擊", "雙重格擋"
+            "反應速度", "攻擊性", "決策能力", "脫離傾向", "接招反擊", "雙重格擋", "施壓",
+            "對刺傾向", "團隊協作"
     };
+    private static final int[] TECHNICAL_STATS = {0, 1, 3, 4, 9};
+    private static final int[] MENTAL_STATS = {2, 5, 7, 13};
+    private static final int[] PERSONALITY_STATS = {6};
+
     private final JTextField nameField = new JTextField();
     private final JComboBox<Tactic> tacticField = new JComboBox<>(Tactic.values());
     private final JSpinner[] statFields = new JSpinner[FRENCH_STAT_LABELS.length];
     private final JLabel titleLabel = new JLabel("", SwingConstants.CENTER), nameLabel = new JLabel(),
-            tacticLabel = new JLabel();
+            tacticLabel = new JLabel(), ratingLabel = new JLabel("", SwingConstants.CENTER),
+            technicalLabel = new JLabel("", SwingConstants.CENTER), mentalLabel = new JLabel("", SwingConstants.CENTER),
+            personalityLabel = new JLabel("", SwingConstants.CENTER), personalityHintLabel = new JLabel("", SwingConstants.CENTER);
     private final JLabel[] statLabels = new JLabel[FRENCH_STAT_LABELS.length];
     private final String frenchPlayerLabel, chinesePlayerLabel;
     private UiLanguage language = UiLanguage.FRENCH;
@@ -25,41 +33,35 @@ final class PlayerEditorPanel extends JPanel {
                       AgentConfiguration configuration) {
         this.frenchPlayerLabel = frenchPlayerLabel;
         this.chinesePlayerLabel = chinesePlayerLabel;
-        setLayout(new GridBagLayout());
+        setLayout(new BorderLayout());
         setBackground(new Color(255, 250, 239));
-        setBorder(BorderFactory.createCompoundBorder(BorderFactory.createLineBorder(color, 2, true),
-                new EmptyBorder(0, 18, 16, 18)));
-        var constraints = new GridBagConstraints();
-        constraints.gridx = 0;
-        constraints.gridy = 0;
-        constraints.gridwidth = 2;
-        constraints.fill = GridBagConstraints.HORIZONTAL;
-        constraints.weightx = 1;
-        constraints.insets = new Insets(0, -18, 18, -18);
+        setBorder(BorderFactory.createLineBorder(color, 2, true));
+
         titleLabel.setOpaque(true);
         titleLabel.setBackground(color);
         titleLabel.setForeground(Color.WHITE);
-        titleLabel.setFont(titleLabel.getFont().deriveFont(Font.BOLD, 20f));
-        titleLabel.setBorder(new EmptyBorder(13, 8, 13, 8));
-        add(titleLabel, constraints);
+        titleLabel.setFont(titleLabel.getFont().deriveFont(Font.BOLD, 19f));
+        titleLabel.setBorder(new EmptyBorder(11, 8, 11, 8));
+        add(titleLabel, BorderLayout.NORTH);
 
-        constraints.gridy = 1;
-        constraints.gridwidth = 1;
-        constraints.weightx = 0;
-        constraints.insets = new Insets(0, 0, 13, 12);
-        add(nameLabel, constraints);
+        var content = new JPanel(new BorderLayout(0, 10));
+        content.setOpaque(false);
+        content.setBorder(new EmptyBorder(12, 13, 13, 13));
+        var identity = new JPanel(new GridBagLayout());
+        identity.setOpaque(false);
+        var constraints = new GridBagConstraints();
+        constraints.gridy = 0;
+        constraints.fill = GridBagConstraints.HORIZONTAL;
+        constraints.insets = new Insets(0, 0, 7, 8);
+        identity.add(nameLabel, constraints);
         nameField.setText(configuration.name());
-        nameField.setColumns(14);
+        nameField.setColumns(11);
         constraints.gridx = 1;
         constraints.weightx = 1;
-        constraints.insets = new Insets(0, 0, 13, 0);
-        add(nameField, constraints);
-
-        constraints.gridx = 0;
-        constraints.gridy = 2;
+        identity.add(nameField, constraints);
+        constraints.gridx = 2;
         constraints.weightx = 0;
-        constraints.insets = new Insets(0, 0, 13, 12);
-        add(tacticLabel, constraints);
+        identity.add(tacticLabel, constraints);
         tacticField.setRenderer(new DefaultListCellRenderer() {
             @Override
             public Component getListCellRendererComponent(JList<?> list, Object value, int index,
@@ -70,47 +72,104 @@ final class PlayerEditorPanel extends JPanel {
             }
         });
         tacticField.setSelectedItem(configuration.tactic());
-        constraints.gridx = 1;
-        constraints.weightx = 1;
-        constraints.insets = new Insets(0, 0, 13, 0);
-        add(tacticField, constraints);
+        constraints.gridx = 3;
+        constraints.insets = new Insets(0, 0, 7, 0);
+        identity.add(tacticField, constraints);
+        ratingLabel.setFont(ratingLabel.getFont().deriveFont(Font.BOLD, 12f));
+        ratingLabel.setForeground(new Color(71, 61, 51));
+        constraints.gridx = 0;
+        constraints.gridy = 1;
+        constraints.gridwidth = 4;
+        constraints.insets = new Insets(1, 0, 0, 0);
+        identity.add(ratingLabel, constraints);
+        content.add(identity, BorderLayout.NORTH);
 
         var stats = configuration.stats();
         var values = new int[]{stats.footwork(), stats.distanceControl(), stats.aim(), stats.attackTiming(),
                 stats.defenseTiming(), stats.reaction(), stats.aggression(), stats.decisionMaking(),
-                stats.zoneExit(), stats.chamber(), stats.doubleBlock()};
-        for (var n = 0; n < FRENCH_STAT_LABELS.length; ++n) {
-            constraints.gridx = 0;
-            constraints.gridy = n + 3;
-            constraints.weightx = 1;
-            constraints.insets = new Insets(0, 0, 9, 12);
+                stats.zoneExit(), stats.chamber(), stats.doubleBlock(), stats.pressure(), stats.fiftyFifty(),
+                stats.teamwork()};
+        for (var n = 0; n < statFields.length; ++n) {
             statLabels[n] = new JLabel();
-            add(statLabels[n], constraints);
             statFields[n] = new JSpinner(new SpinnerNumberModel(values[n], 1, 100, 1));
-            ((JSpinner.DefaultEditor) statFields[n].getEditor()).getTextField().setColumns(3);
+            ((JSpinner.DefaultEditor) statFields[n].getEditor()).getTextField().setColumns(2);
+            statFields[n].addChangeListener(event -> updateRating());
+        }
+
+        var categories = new JPanel(new GridLayout(1, 3, 10, 0));
+        categories.setOpaque(false);
+        categories.add(createCategory(technicalLabel, TECHNICAL_STATS, color));
+        categories.add(createCategory(mentalLabel, MENTAL_STATS, color));
+        categories.add(createPersonalityCategory(color));
+        content.add(categories, BorderLayout.CENTER);
+        add(content, BorderLayout.CENTER);
+        setLanguage(UiLanguage.FRENCH);
+    }
+
+    private JPanel createCategory(JLabel heading, int[] indexes, Color color) {
+        var panel = new JPanel(new GridBagLayout());
+        panel.setBackground(new Color(252, 246, 233));
+        panel.setBorder(BorderFactory.createLineBorder(new Color(color.getRed(), color.getGreen(), color.getBlue(), 80)));
+        heading.setOpaque(true);
+        heading.setBackground(new Color(color.getRed(), color.getGreen(), color.getBlue(), 24));
+        heading.setForeground(new Color(64, 55, 46));
+        heading.setFont(heading.getFont().deriveFont(Font.BOLD, 11f));
+        heading.setBorder(new EmptyBorder(7, 4, 7, 4));
+        var constraints = new GridBagConstraints();
+        constraints.gridx = 0;
+        constraints.gridy = 0;
+        constraints.gridwidth = 2;
+        constraints.weightx = 1;
+        constraints.fill = GridBagConstraints.HORIZONTAL;
+        constraints.insets = new Insets(0, 0, 7, 0);
+        panel.add(heading, constraints);
+        constraints.gridwidth = 1;
+        for (var row = 0; row < indexes.length; ++row) {
+            var index = indexes[row];
+            constraints.gridx = 0;
+            constraints.gridy = row + 1;
+            constraints.weightx = 1;
+            constraints.insets = new Insets(0, 8, 7, 5);
+            panel.add(statLabels[index], constraints);
             constraints.gridx = 1;
             constraints.weightx = 0;
-            constraints.insets = new Insets(0, 0, 9, 0);
-            add(statFields[n], constraints);
+            constraints.insets = new Insets(0, 0, 7, 8);
+            panel.add(statFields[index], constraints);
         }
         constraints.gridx = 0;
-        constraints.gridy = FRENCH_STAT_LABELS.length + 3;
+        constraints.gridy = indexes.length + 1;
         constraints.gridwidth = 2;
         constraints.weighty = 1;
         constraints.fill = GridBagConstraints.BOTH;
         constraints.insets = new Insets(0, 0, 0, 0);
-        add(Box.createGlue(), constraints);
-        setLanguage(UiLanguage.FRENCH);
+        panel.add(Box.createGlue(), constraints);
+        return panel;
+    }
+
+    private JPanel createPersonalityCategory(Color color) {
+        var panel = createCategory(personalityLabel, PERSONALITY_STATS, color);
+        personalityHintLabel.setFont(personalityHintLabel.getFont().deriveFont(Font.ITALIC, 9f));
+        personalityHintLabel.setForeground(new Color(105, 91, 76));
+        personalityHintLabel.setBorder(new EmptyBorder(4, 5, 7, 5));
+        panel.add(personalityHintLabel, new GridBagConstraints(0, PERSONALITY_STATS.length + 2, 2, 1, 1, 0,
+                GridBagConstraints.CENTER, GridBagConstraints.HORIZONTAL, new Insets(0, 0, 0, 0), 0, 0));
+        return panel;
     }
 
     void setLanguage(UiLanguage language) {
         this.language = language;
         titleLabel.setText(language.text(frenchPlayerLabel, chinesePlayerLabel));
-        nameLabel.setText(language.text("Nom du joueur", "玩家名稱"));
+        nameLabel.setText(language.text("Nom", "姓名"));
         tacticLabel.setText(language.text("Tactique", "戰術"));
+        technicalLabel.setText(language.text("TECHNIQUE", "技術能力"));
+        mentalLabel.setText(language.text("MENTAL", "心理能力"));
+        personalityLabel.setText(language.text("PERSONNALITÉ", "個人風格"));
+        personalityHintLabel.setText(language.text("Préférences uniquement — hors niveau",
+                "只改變選擇傾向，不計入等級"));
         for (var n = 0; n < statLabels.length; ++n)
             statLabels[n].setText(language.text(FRENCH_STAT_LABELS[n], CHINESE_STAT_LABELS[n]));
         tacticField.repaint();
+        updateRating();
     }
 
     AgentConfiguration configuration() throws ParseException {
@@ -124,9 +183,25 @@ final class PlayerEditorPanel extends JPanel {
             throw new IllegalArgumentException(language.text(
                     "Le nom de " + playerLabel + " est limité à 18 caractères.",
                     playerLabel + "名稱不得超過 18 個字元。"));
-        return new AgentConfiguration(name, new AgentStats(value(0), value(1), value(2), value(3), value(4),
-                value(5), value(6), value(7), value(8), value(9), value(10)),
-                (Tactic) tacticField.getSelectedItem());
+        return new AgentConfiguration(name, currentStats(), (Tactic) tacticField.getSelectedItem());
+    }
+
+    private AgentStats currentStats() {
+        return new AgentStats(value(0), value(1), value(2), value(3), value(4), value(5), value(6), value(7),
+                50, value(9), 50, 50, 50, value(13));
+    }
+
+    private void updateRating() {
+        if (statFields[0] == null) return;
+        var stats = currentStats();
+        var profile = RatingProfile.MODERN;
+        ratingLabel.setText(language.text(
+                "Niveau : %s %d  ·  Technique %d  ·  Mental %d".formatted(
+                        stats.playerLevel(profile).label(language), stats.overallRating(profile),
+                        stats.technicalRating(profile), stats.mentalRating(profile)),
+                "等級：%s %d  ·  技術 %d  ·  心理 %d".formatted(
+                        stats.playerLevel(profile).label(language), stats.overallRating(profile),
+                        stats.technicalRating(profile), stats.mentalRating(profile))));
     }
 
     private int value(int index) {

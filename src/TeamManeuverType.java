@@ -1,0 +1,13 @@
+enum TeamManeuverType {
+    HOLD_LINE,
+    ROTATE_LEFT,
+    ROTATE_RIGHT,
+    PRESS_FORWARD,
+    GIVE_GROUND,
+    SHIFT_LEFT,
+    SHIFT_RIGHT,
+    COMPRESS,
+    EXPAND,
+    CROSS_COVER,
+    RECOVER_FORMATION
+}
